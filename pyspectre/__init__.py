@@ -98,9 +98,11 @@ def get_parameters( session: Union[core.Session, Iterable[core.Session]]
     return _run(num, core.get_parameters, session, params)
 
 def stop_session( session: Union[core.Session,Iterable[core.Session]]
+                , remove_raw: bool = True
                 ) -> Union[bool, Iterable[bool]]:
     """
     Stop spectre interactive session(s)
     """
     num = 1 if isinstance(session, core.Session) else len(session)
-    return _run(num, core.stop_session, session)
+    rem  = num * [remove_raw] if num > 1 else remove_raw
+    return _run(num, core.stop_session, session, rem)

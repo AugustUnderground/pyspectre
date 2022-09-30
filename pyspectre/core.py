@@ -186,7 +186,7 @@ def get_parameters(session: Session, params: Iterable[str]) -> dict[str, float]:
     """
     return {param: get_parameter(session, param) for param in params}
 
-def stop_session(session) -> bool:
+def stop_session(session, remove_raw: bool = False) -> bool:
     """
     Quit spectre interactive session and close terminal
     """
@@ -197,4 +197,6 @@ def stop_session(session) -> bool:
             warnings.warn( 'spectre refused to exit gracefully, forcing ...'
                          , RuntimeWarning )
             session.repl.terminate(force = True)
+    if remove_raw:
+        os.remove(session.raw_file)
     return not session.repl.isalive()
