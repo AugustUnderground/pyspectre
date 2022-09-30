@@ -31,46 +31,84 @@
 
 import os
 import re
-import tempfile
+from   subprocess      import run, DEVNULL
+from   tempfile        import NamedTemporaryFile
 import errno
 import warnings
-from typing import NamedTuple, NewType
+from   collections.abc import Iterable
+from   typing          import NamedTuple, NewType
 import pexpect
-import pandas as pd
-import pynut as pn
+from   pandas          import DataFrame
+from   pynut           import read_raw, plot_dict
 
 def netlist_to_tmp(netlist: str) -&gt; str:
     &#34;&#34;&#34;
     Write a netlist to a temporary file
     &#34;&#34;&#34;
-    with tempfile.NamedTemporaryFile( mode   = &#39;w&#39;
-                                    , suffix = &#39;.scs&#39;
-                                    , delete = False
-                                    , ) as tmp:
-        path = tmp.name
-        _    = tmp.write(netlist)
-        _    = tmp.close
+    tmp  = NamedTemporaryFile(mode = &#39;w&#39;, suffix = &#39;.scs&#39;, delete = False)
+    path = tmp.name
+    tmp.write(netlist)
+    tmp.close()
     return path
 
-def simulate( netlist_path: str, includes: list[str] = None
-            , raw_path: str = None ) -&gt; pn.NutMeg:
+def raw_tmp(net_path: str) -&gt; str:
+    &#34;&#34;&#34;
+    Raw simulation results in /tmp
+    &#34;&#34;&#34;
+    pre  = f&#39;{os.path.splitext(os.path.basename(net_path))[0]}&#39;
+    suf  = &#39;.raw&#39;
+    tmp  = NamedTemporaryFile(prefix = pre, suffix = suf, delete = False)
+    path = tmp.name
+    tmp.close()
+    return path
+
+def read_results(raw_file: str) -&gt; dict[str, DataFrame]:
+    &#34;&#34;&#34;
+    Read simulation results
+    &#34;&#34;&#34;
+    if not os.path.isfile(raw_file):
+        raise(FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT), raw_file))
+    if not os.access(raw_file, os.R_OK):
+        raise(PermissionError(errno.EACCES, os.strerror(errno.EACCES), raw_file))
+
+    return plot_dict(read_raw(raw_file))
+
+def simulate( netlist_path: str, includes: Iterable[str] = None
+            , raw_path: str = None ) -&gt; dict[str, DataFrame]:
     &#34;&#34;&#34;
     Passes the given netlist path to spectre and reads the results in.
     &#34;&#34;&#34;
-    inc = &#39;&#39; if not includes else &#39;-I&#39; + &#39; -I&#39;.join(includes)
-    raw = raw_path or f&#39;{os.path.splitext(os.path.basename(netlist_path))[0]}.raw&#39;
-    cmd = f&#39;spectre -64 -format nutbin -raw {raw} -log {inc} {netlist_path}&#39;
-    ret = os.system(cmd)
+    net = os.path.expanduser(netlist_path)
+    inc = [f&#39;-I{os.path.expanduser(i)}&#39; for i in includes]
+    raw = raw_path or raw_tmp(net)
+    cmd = [&#39;spectre&#39;, &#39;-64&#39;, &#39;-format nutbin&#39;, f&#39;-raw {raw}&#39;, &#39;-log&#39;
+          ] + inc + [net]
+
+    if not os.path.isfile(net):
+        raise(FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT), net))
+    if not os.access(net, os.R_OK):
+        raise(PermissionError(errno.EACCES, os.strerror(errno.EACCES), net))
+
+    #ret = os.system(cmd)
+    ret = run( cmd
+             , check          = False
+             , stdin          = DEVNULL
+             , stdout         = DEVNULL
+             , stderr         = DEVNULL
+             , capture_output = False
+             , ).returncode
 
     if ret != 0:
-        raise(IOError( errno.EIO, os.strerror(errno.EIO), &#39;spectre&#39;))
+        raise(IOError(errno.EIO, os.strerror(errno.EIO), &#39;spectre&#39;))
 
     if not os.path.isfile(raw):
         raise(FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT), raw))
+    if not os.access(raw, os.R_OK):
+        raise(PermissionError(errno.EACCES, os.strerror(errno.EACCES), raw))
 
-    return raw
+    return read_results(raw)
 
-def simulate_netlist(netlist: str, **kwargs) -&gt; pn.NutMeg:
+def simulate_netlist(netlist: str, **kwargs) -&gt; dict[str, DataFrame]:
     &#34;&#34;&#34;
     Takes a netlist as text, creates a temporary file and simulates it. The
     results are read in and all temp files will be destroyed.
@@ -95,19 +133,21 @@ def start_session( net_path: str, includes: list[str] = None
     &#34;&#34;&#34;
     Start spectre interactive session
     &#34;&#34;&#34;
-    if not os.path.isfile(net_path):
-        raise(FileNotFoundError( errno.ENOENT
-                               , os.strerror(errno.ENOENT)
-                               , net_path ))
-
     prompt = &#39;\r\n&gt;\s&#39;
     succ   = &#39;.*\nt&#39;
     fail   = &#39;.*\nnil&#39;
-    raw    = raw_path or f&#39;{os.path.splitext(os.path.basename(net_path))[0]}.raw&#39;
-    inc    = [] if not includes else [f&#39;-I{i}&#39; for i in includes]
+    net    = os.path.expanduser(net_path)
+    raw    = raw_path or raw_tmp(net)
+    inc    = [] if not includes else [f&#39;-I{os.path.expanduser(i)}&#39; for i in includes]
     cmd    = &#39;spectre&#39;
     args   = [&#39;-64&#39;, &#39;+interactive&#39;, &#39;-format nutbin&#39;, f&#39;-raw {raw}&#39;, &#39;-log&#39;
-             ] + inc + [net_path]
+             ] + inc + [net]
+
+    if not os.path.isfile(net):
+        raise(FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT), net))
+    if not os.access(net, os.R_OK):
+        raise(PermissionError(errno.EACCES, os.strerror(errno.EACCES), net))
+
     repl   = pexpect.spawn(cmd, args)
 
     if repl.expect(prompt) != 0:
@@ -123,23 +163,12 @@ def run_command(session: Session, command: str) -&gt; bool:
     session.repl.sendline(command)
     return session.repl.expect(session.prompt) == 0
 
-def read_results(session: Session) -&gt; dict[str, pd.DataFrame]:
-    &#34;&#34;&#34;
-    Read simulation results
-    &#34;&#34;&#34;
-    if not os.path.isfile(session.raw_file):
-        raise(FileNotFoundError( errno.ENOENT
-                               , os.strerror(errno.ENOENT)
-                               , session.raw_file ))
-
-    return pn.plot_dict(pn.read_raw(session.raw_file))
-
-def run_all(session: Session) -&gt; dict[str, pd.DataFrame]:
+def run_all(session: Session) -&gt; dict[str, DataFrame]:
     &#34;&#34;&#34;
     Run all simulation analyses
     &#34;&#34;&#34;
     run_command(session, &#39;(sclRun &#34;all&#34;)&#39;)
-    return read_results(session)
+    return read_results(session.raw_file)
 
 def get_analyses(session: Session) -&gt; dict[str, str]:
     &#34;&#34;&#34;
@@ -150,13 +179,13 @@ def get_analyses(session: Session) -&gt; dict[str, str]:
     out = session.repl.before.decode(&#39;utf-8&#39;).split(&#39;\n&#39;)[1:-1]
     return dict([re.search(r&#39;&#34;(.+)&#34;\s*&#34;(.+)&#34;&#39;, o).groups() for o in out])
 
-def run_analysis(session: Session, analysis: str) -&gt; dict[str, pd.DataFrame]:
+def run_analysis(session: Session, analysis: str) -&gt; dict[str, DataFrame]:
     &#34;&#34;&#34;
     Run only the given analysis.
     &#34;&#34;&#34;
     cmd = f&#39;(sclRunAnalysis (sclGetAnalysis &#34;{analysis}&#34;))&#39;
     run_command(session, cmd)
-    return read_results(session)
+    return read_results(session.raw_file)
 
 def set_parameter(session: Session, param: str, value: float) -&gt; bool:
     &#34;&#34;&#34;
@@ -177,9 +206,10 @@ def get_parameter(session: Session, param: str) -&gt; float:
     Get a parameter in the netlist.
     &#34;&#34;&#34;
     cmd = f&#39;(sclGetAttribute (sclGetParameter (sclGetCircuit &#34;&#34;) &#34;{param}&#34;) &#34;value&#34;)&#39;
-    return run_command(session, cmd)
+    run_command(session, cmd)
+    return float(session.repl.before.decode(&#39;utf-8&#39;).split(&#39;\n&#39;)[-1])
 
-def get_parameters(session: Session, params: list[str]) -&gt; dict[str, float]:
+def get_parameters(session: Session, params: Iterable[str]) -&gt; dict[str, float]:
     &#34;&#34;&#34;
     Get a set of parameters in the netlist.
     &#34;&#34;&#34;
@@ -239,11 +269,12 @@ def stop_session(session) -&gt; bool:
     Get a parameter in the netlist.
     &#34;&#34;&#34;
     cmd = f&#39;(sclGetAttribute (sclGetParameter (sclGetCircuit &#34;&#34;) &#34;{param}&#34;) &#34;value&#34;)&#39;
-    return run_command(session, cmd)</code></pre>
+    run_command(session, cmd)
+    return float(session.repl.before.decode(&#39;utf-8&#39;).split(&#39;\n&#39;)[-1])</code></pre>
 </details>
 </dd>
 <dt id="pyspectre.core.get_parameters"><code class="name flex">
-<span>def <span class="ident">get_parameters</span></span>(<span>session: <a title="pyspectre.core.Session" href="#pyspectre.core.Session">Session</a>, params: list[str]) ‑> dict[str, float]</span>
+<span>def <span class="ident">get_parameters</span></span>(<span>session: <a title="pyspectre.core.Session" href="#pyspectre.core.Session">Session</a>, params: collections.abc.Iterable[str]) ‑> dict[str, float]</span>
 </code></dt>
 <dd>
 <div class="desc"><p>Get a set of parameters in the netlist.</p></div>
@@ -251,7 +282,7 @@ def stop_session(session) -&gt; bool:
 <summary>
 <span>Expand source code</span>
 </summary>
-<pre><code class="python">def get_parameters(session: Session, params: list[str]) -&gt; dict[str, float]:
+<pre><code class="python">def get_parameters(session: Session, params: Iterable[str]) -&gt; dict[str, float]:
     &#34;&#34;&#34;
     Get a set of parameters in the netlist.
     &#34;&#34;&#34;
@@ -271,18 +302,36 @@ def stop_session(session) -&gt; bool:
     &#34;&#34;&#34;
     Write a netlist to a temporary file
     &#34;&#34;&#34;
-    with tempfile.NamedTemporaryFile( mode   = &#39;w&#39;
-                                    , suffix = &#39;.scs&#39;
-                                    , delete = False
-                                    , ) as tmp:
-        path = tmp.name
-        _    = tmp.write(netlist)
-        _    = tmp.close
+    tmp  = NamedTemporaryFile(mode = &#39;w&#39;, suffix = &#39;.scs&#39;, delete = False)
+    path = tmp.name
+    tmp.write(netlist)
+    tmp.close()
+    return path</code></pre>
+</details>
+</dd>
+<dt id="pyspectre.core.raw_tmp"><code class="name flex">
+<span>def <span class="ident">raw_tmp</span></span>(<span>net_path: str) ‑> str</span>
+</code></dt>
+<dd>
+<div class="desc"><p>Raw simulation results in /tmp</p></div>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def raw_tmp(net_path: str) -&gt; str:
+    &#34;&#34;&#34;
+    Raw simulation results in /tmp
+    &#34;&#34;&#34;
+    pre  = f&#39;{os.path.splitext(os.path.basename(net_path))[0]}&#39;
+    suf  = &#39;.raw&#39;
+    tmp  = NamedTemporaryFile(prefix = pre, suffix = suf, delete = False)
+    path = tmp.name
+    tmp.close()
     return path</code></pre>
 </details>
 </dd>
 <dt id="pyspectre.core.read_results"><code class="name flex">
-<span>def <span class="ident">read_results</span></span>(<span>session: <a title="pyspectre.core.Session" href="#pyspectre.core.Session">Session</a>) ‑> dict[str, pandas.core.frame.DataFrame]</span>
+<span>def <span class="ident">read_results</span></span>(<span>raw_file: str) ‑> dict[str, pandas.core.frame.DataFrame]</span>
 </code></dt>
 <dd>
 <div class="desc"><p>Read simulation results</p></div>
@@ -290,16 +339,16 @@ def stop_session(session) -&gt; bool:
 <summary>
 <span>Expand source code</span>
 </summary>
-<pre><code class="python">def read_results(session: Session) -&gt; dict[str, pd.DataFrame]:
+<pre><code class="python">def read_results(raw_file: str) -&gt; dict[str, DataFrame]:
     &#34;&#34;&#34;
     Read simulation results
     &#34;&#34;&#34;
-    if not os.path.isfile(session.raw_file):
-        raise(FileNotFoundError( errno.ENOENT
-                               , os.strerror(errno.ENOENT)
-                               , session.raw_file ))
+    if not os.path.isfile(raw_file):
+        raise(FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT), raw_file))
+    if not os.access(raw_file, os.R_OK):
+        raise(PermissionError(errno.EACCES, os.strerror(errno.EACCES), raw_file))
 
-    return pn.plot_dict(pn.read_raw(session.raw_file))</code></pre>
+    return plot_dict(read_raw(raw_file))</code></pre>
 </details>
 </dd>
 <dt id="pyspectre.core.run_all"><code class="name flex">
@@ -311,12 +360,12 @@ def stop_session(session) -&gt; bool:
 <summary>
 <span>Expand source code</span>
 </summary>
-<pre><code class="python">def run_all(session: Session) -&gt; dict[str, pd.DataFrame]:
+<pre><code class="python">def run_all(session: Session) -&gt; dict[str, DataFrame]:
     &#34;&#34;&#34;
     Run all simulation analyses
     &#34;&#34;&#34;
     run_command(session, &#39;(sclRun &#34;all&#34;)&#39;)
-    return read_results(session)</code></pre>
+    return read_results(session.raw_file)</code></pre>
 </details>
 </dd>
 <dt id="pyspectre.core.run_analysis"><code class="name flex">
@@ -328,13 +377,13 @@ def stop_session(session) -&gt; bool:
 <summary>
 <span>Expand source code</span>
 </summary>
-<pre><code class="python">def run_analysis(session: Session, analysis: str) -&gt; dict[str, pd.DataFrame]:
+<pre><code class="python">def run_analysis(session: Session, analysis: str) -&gt; dict[str, DataFrame]:
     &#34;&#34;&#34;
     Run only the given analysis.
     &#34;&#34;&#34;
     cmd = f&#39;(sclRunAnalysis (sclGetAnalysis &#34;{analysis}&#34;))&#39;
     run_command(session, cmd)
-    return read_results(session)</code></pre>
+    return read_results(session.raw_file)</code></pre>
 </details>
 </dd>
 <dt id="pyspectre.core.run_command"><code class="name flex">
@@ -392,7 +441,7 @@ otherwise.</p></div>
 </details>
 </dd>
 <dt id="pyspectre.core.simulate"><code class="name flex">
-<span>def <span class="ident">simulate</span></span>(<span>netlist_path: str, includes: list[str] = None, raw_path: str = None) ‑> pynut.pynut.NutMeg</span>
+<span>def <span class="ident">simulate</span></span>(<span>netlist_path: str, includes: collections.abc.Iterable[str] = None, raw_path: str = None) ‑> dict[str, pandas.core.frame.DataFrame]</span>
 </code></dt>
 <dd>
 <div class="desc"><p>Passes the given netlist path to spectre and reads the results in.</p></div>
@@ -400,27 +449,44 @@ otherwise.</p></div>
 <summary>
 <span>Expand source code</span>
 </summary>
-<pre><code class="python">def simulate( netlist_path: str, includes: list[str] = None
-            , raw_path: str = None ) -&gt; pn.NutMeg:
+<pre><code class="python">def simulate( netlist_path: str, includes: Iterable[str] = None
+            , raw_path: str = None ) -&gt; dict[str, DataFrame]:
     &#34;&#34;&#34;
     Passes the given netlist path to spectre and reads the results in.
     &#34;&#34;&#34;
-    inc = &#39;&#39; if not includes else &#39;-I&#39; + &#39; -I&#39;.join(includes)
-    raw = raw_path or f&#39;{os.path.splitext(os.path.basename(netlist_path))[0]}.raw&#39;
-    cmd = f&#39;spectre -64 -format nutbin -raw {raw} -log {inc} {netlist_path}&#39;
-    ret = os.system(cmd)
+    net = os.path.expanduser(netlist_path)
+    inc = [f&#39;-I{os.path.expanduser(i)}&#39; for i in includes]
+    raw = raw_path or raw_tmp(net)
+    cmd = [&#39;spectre&#39;, &#39;-64&#39;, &#39;-format nutbin&#39;, f&#39;-raw {raw}&#39;, &#39;-log&#39;
+          ] + inc + [net]
+
+    if not os.path.isfile(net):
+        raise(FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT), net))
+    if not os.access(net, os.R_OK):
+        raise(PermissionError(errno.EACCES, os.strerror(errno.EACCES), net))
+
+    #ret = os.system(cmd)
+    ret = run( cmd
+             , check          = False
+             , stdin          = DEVNULL
+             , stdout         = DEVNULL
+             , stderr         = DEVNULL
+             , capture_output = False
+             , ).returncode
 
     if ret != 0:
-        raise(IOError( errno.EIO, os.strerror(errno.EIO), &#39;spectre&#39;))
+        raise(IOError(errno.EIO, os.strerror(errno.EIO), &#39;spectre&#39;))
 
     if not os.path.isfile(raw):
         raise(FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT), raw))
+    if not os.access(raw, os.R_OK):
+        raise(PermissionError(errno.EACCES, os.strerror(errno.EACCES), raw))
 
-    return raw</code></pre>
+    return read_results(raw)</code></pre>
 </details>
 </dd>
 <dt id="pyspectre.core.simulate_netlist"><code class="name flex">
-<span>def <span class="ident">simulate_netlist</span></span>(<span>netlist: str, **kwargs) ‑> pynut.pynut.NutMeg</span>
+<span>def <span class="ident">simulate_netlist</span></span>(<span>netlist: str, **kwargs) ‑> dict[str, pandas.core.frame.DataFrame]</span>
 </code></dt>
 <dd>
 <div class="desc"><p>Takes a netlist as text, creates a temporary file and simulates it. The
@@ -429,7 +495,7 @@ results are read in and all temp files will be destroyed.</p></div>
 <summary>
 <span>Expand source code</span>
 </summary>
-<pre><code class="python">def simulate_netlist(netlist: str, **kwargs) -&gt; pn.NutMeg:
+<pre><code class="python">def simulate_netlist(netlist: str, **kwargs) -&gt; dict[str, DataFrame]:
     &#34;&#34;&#34;
     Takes a netlist as text, creates a temporary file and simulates it. The
     results are read in and all temp files will be destroyed.
@@ -454,19 +520,21 @@ results are read in and all temp files will be destroyed.</p></div>
     &#34;&#34;&#34;
     Start spectre interactive session
     &#34;&#34;&#34;
-    if not os.path.isfile(net_path):
-        raise(FileNotFoundError( errno.ENOENT
-                               , os.strerror(errno.ENOENT)
-                               , net_path ))
-
     prompt = &#39;\r\n&gt;\s&#39;
     succ   = &#39;.*\nt&#39;
     fail   = &#39;.*\nnil&#39;
-    raw    = raw_path or f&#39;{os.path.splitext(os.path.basename(net_path))[0]}.raw&#39;
-    inc    = [] if not includes else [f&#39;-I{i}&#39; for i in includes]
+    net    = os.path.expanduser(net_path)
+    raw    = raw_path or raw_tmp(net)
+    inc    = [] if not includes else [f&#39;-I{os.path.expanduser(i)}&#39; for i in includes]
     cmd    = &#39;spectre&#39;
     args   = [&#39;-64&#39;, &#39;+interactive&#39;, &#39;-format nutbin&#39;, f&#39;-raw {raw}&#39;, &#39;-log&#39;
-             ] + inc + [net_path]
+             ] + inc + [net]
+
+    if not os.path.isfile(net):
+        raise(FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT), net))
+    if not os.access(net, os.R_OK):
+        raise(PermissionError(errno.EACCES, os.strerror(errno.EACCES), net))
+
     repl   = pexpect.spawn(cmd, args)
 
     if repl.expect(prompt) != 0:
@@ -561,6 +629,7 @@ results are read in and all temp files will be destroyed.</p></div>
 <li><code><a title="pyspectre.core.get_parameter" href="#pyspectre.core.get_parameter">get_parameter</a></code></li>
 <li><code><a title="pyspectre.core.get_parameters" href="#pyspectre.core.get_parameters">get_parameters</a></code></li>
 <li><code><a title="pyspectre.core.netlist_to_tmp" href="#pyspectre.core.netlist_to_tmp">netlist_to_tmp</a></code></li>
+<li><code><a title="pyspectre.core.raw_tmp" href="#pyspectre.core.raw_tmp">raw_tmp</a></code></li>
 <li><code><a title="pyspectre.core.read_results" href="#pyspectre.core.read_results">read_results</a></code></li>
 <li><code><a title="pyspectre.core.run_all" href="#pyspectre.core.run_all">run_all</a></code></li>
 <li><code><a title="pyspectre.core.run_analysis" href="#pyspectre.core.run_analysis">run_analysis</a></code></li>

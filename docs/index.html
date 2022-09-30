@@ -29,13 +29,12 @@
 </summary>
 <pre><code class="python">&#34;&#34;&#34; Python interface for Cadence Spectre &#34;&#34;&#34;
 
-from collections.abc import Iterable
-from typing import Callable, Union
-from multiprocessing import cpu_count
+from collections.abc       import Iterable
+from multiprocessing       import cpu_count
 from multiprocessing.dummy import Pool
-import pandas as pd
-import pynut as pn
-from . import core
+from typing                import Callable, Union
+from pandas                import DataFrame
+from .                     import core
 
 def _run(num: int, fun: Callable, *args):
     &#34;&#34;&#34;
@@ -52,21 +51,23 @@ def _run(num: int, fun: Callable, *args):
 def simulate( net_path: Union[str,Iterable[str]]
             , includes: Union[Iterable[str], Iterable[Iterable[str]]] = None
             , raw_path: Union[str,Iterable[str]] = None
-            ) -&gt; Union[pn.NutMeg, Iterable[pn.NutMeg]]:
+            ) -&gt; Union[ dict[str, DataFrame]
+                      , Iterable[dict[str, DataFrame]] ]:
     &#34;&#34;&#34;
     Passes the given netlists to spectre instances and reads the results in.
     &#34;&#34;&#34;
-    num = len(net_path) if isinstance(net_path, Iterable) else 1
+    num = 1 if isinstance(net_path, str) else len(net_path)
     return _run(num, core.simulate, net_path, includes, raw_path)
 
 def simulate_netlists( netlist: Union[str,Iterable[str]]
                      , includes: Union[Iterable[str], Iterable[Iterable[str]]] = None
                      , raw_path: Union[str,Iterable[str]] = None
-                     ) -&gt; Union[pn.NutMeg, Iterable[pn.NutMeg]]:
+                     ) -&gt; Union[ dict[str, DataFrame]
+                               , Iterable[dict[str, DataFrame]] ]:
     &#34;&#34;&#34;
     Passes the given netlists to spectre instances and reads the results in.
     &#34;&#34;&#34;
-    num = len(netlist) if isinstance(netlist, Iterable) else 1
+    num = 1 if isinstance(netlist, str) else len(netlist)
     return _run(num, core.simulate_netlist, netlist, includes, raw_path)
 
 def start_session( net_path: Union[str, Iterable[str]]
@@ -76,17 +77,17 @@ def start_session( net_path: Union[str, Iterable[str]]
     &#34;&#34;&#34;
     Start spectre interactive session(s)
     &#34;&#34;&#34;
-    num = len(net_path) if isinstance(net_path, Iterable) and not isinstance(net_path, str) else 1
+    num = 1 if isinstance(net_path, str) else len(net_path)
     raws = num * [raw_path] if num &gt; 1 else raw_path
     return _run(num, core.start_session, net_path, includes, raws)
 
 def run_all( session: Union[core.Session, Iterable[core.Session]]
-           ) -&gt; Union[ dict[str, pd.DataFrame]
-                     , Iterable[dict[str, pd.DataFrame]] ]:
+           ) -&gt; Union[ dict[str, DataFrame]
+                     , Iterable[dict[str, DataFrame]] ]:
     &#34;&#34;&#34;
     Run all simulation analyses
     &#34;&#34;&#34;
-    num = 1 if isinstance(session, core.Session) else len(session) 
+    num = 1 if isinstance(session, core.Session) else len(session)
     return _run(num, core.run_all, session)
 
 def get_analyses( session: core.Session
@@ -99,8 +100,8 @@ def get_analyses( session: core.Session
 
 def run_analysis( session: Union[core.Session, Iterable[core.Session]]
                 , analysis: Union[str, Iterable[str]]
-                ) -&gt; Union[ dict[str, pd.DataFrame]
-                          , Iterable[dict[str, pd.DataFrame]] ]:
+                ) -&gt; Union[ dict[str, DataFrame]
+                          , Iterable[dict[str, DataFrame]] ]:
     &#34;&#34;&#34;
     Run only the given analysis.
     &#34;&#34;&#34;
@@ -195,12 +196,12 @@ def stop_session( session: Union[core.Session,Iterable[core.Session]]
 <span>Expand source code</span>
 </summary>
 <pre><code class="python">def run_all( session: Union[core.Session, Iterable[core.Session]]
-           ) -&gt; Union[ dict[str, pd.DataFrame]
-                     , Iterable[dict[str, pd.DataFrame]] ]:
+           ) -&gt; Union[ dict[str, DataFrame]
+                     , Iterable[dict[str, DataFrame]] ]:
     &#34;&#34;&#34;
     Run all simulation analyses
     &#34;&#34;&#34;
-    num = 1 if isinstance(session, core.Session) else len(session) 
+    num = 1 if isinstance(session, core.Session) else len(session)
     return _run(num, core.run_all, session)</code></pre>
 </details>
 </dd>
@@ -215,8 +216,8 @@ def stop_session( session: Union[core.Session,Iterable[core.Session]]
 </summary>
 <pre><code class="python">def run_analysis( session: Union[core.Session, Iterable[core.Session]]
                 , analysis: Union[str, Iterable[str]]
-                ) -&gt; Union[ dict[str, pd.DataFrame]
-                          , Iterable[dict[str, pd.DataFrame]] ]:
+                ) -&gt; Union[ dict[str, DataFrame]
+                          , Iterable[dict[str, DataFrame]] ]:
     &#34;&#34;&#34;
     Run only the given analysis.
     &#34;&#34;&#34;
@@ -244,7 +245,7 @@ def stop_session( session: Union[core.Session,Iterable[core.Session]]
 </details>
 </dd>
 <dt id="pyspectre.simulate"><code class="name flex">
-<span>def <span class="ident">simulate</span></span>(<span>net_path: Union[str, collections.abc.Iterable[str]], includes: Union[collections.abc.Iterable[str], collections.abc.Iterable[collections.abc.Iterable[str]]] = None, raw_path: Union[str, collections.abc.Iterable[str]] = None) ‑> Union[pynut.pynut.NutMeg, collections.abc.Iterable[pynut.pynut.NutMeg]]</span>
+<span>def <span class="ident">simulate</span></span>(<span>net_path: Union[str, collections.abc.Iterable[str]], includes: Union[collections.abc.Iterable[str], collections.abc.Iterable[collections.abc.Iterable[str]]] = None, raw_path: Union[str, collections.abc.Iterable[str]] = None) ‑> Union[dict[str, pandas.core.frame.DataFrame], collections.abc.Iterable[dict[str, pandas.core.frame.DataFrame]]]</span>
 </code></dt>
 <dd>
 <div class="desc"><p>Passes the given netlists to spectre instances and reads the results in.</p></div>
@@ -255,16 +256,17 @@ def stop_session( session: Union[core.Session,Iterable[core.Session]]
 <pre><code class="python">def simulate( net_path: Union[str,Iterable[str]]
             , includes: Union[Iterable[str], Iterable[Iterable[str]]] = None
             , raw_path: Union[str,Iterable[str]] = None
-            ) -&gt; Union[pn.NutMeg, Iterable[pn.NutMeg]]:
+            ) -&gt; Union[ dict[str, DataFrame]
+                      , Iterable[dict[str, DataFrame]] ]:
     &#34;&#34;&#34;
     Passes the given netlists to spectre instances and reads the results in.
     &#34;&#34;&#34;
-    num = len(net_path) if isinstance(net_path, Iterable) else 1
+    num = 1 if isinstance(net_path, str) else len(net_path)
     return _run(num, core.simulate, net_path, includes, raw_path)</code></pre>
 </details>
 </dd>
 <dt id="pyspectre.simulate_netlists"><code class="name flex">
-<span>def <span class="ident">simulate_netlists</span></span>(<span>netlist: Union[str, collections.abc.Iterable[str]], includes: Union[collections.abc.Iterable[str], collections.abc.Iterable[collections.abc.Iterable[str]]] = None, raw_path: Union[str, collections.abc.Iterable[str]] = None) ‑> Union[pynut.pynut.NutMeg, collections.abc.Iterable[pynut.pynut.NutMeg]]</span>
+<span>def <span class="ident">simulate_netlists</span></span>(<span>netlist: Union[str, collections.abc.Iterable[str]], includes: Union[collections.abc.Iterable[str], collections.abc.Iterable[collections.abc.Iterable[str]]] = None, raw_path: Union[str, collections.abc.Iterable[str]] = None) ‑> Union[dict[str, pandas.core.frame.DataFrame], collections.abc.Iterable[dict[str, pandas.core.frame.DataFrame]]]</span>
 </code></dt>
 <dd>
 <div class="desc"><p>Passes the given netlists to spectre instances and reads the results in.</p></div>
@@ -275,11 +277,12 @@ def stop_session( session: Union[core.Session,Iterable[core.Session]]
 <pre><code class="python">def simulate_netlists( netlist: Union[str,Iterable[str]]
                      , includes: Union[Iterable[str], Iterable[Iterable[str]]] = None
                      , raw_path: Union[str,Iterable[str]] = None
-                     ) -&gt; Union[pn.NutMeg, Iterable[pn.NutMeg]]:
+                     ) -&gt; Union[ dict[str, DataFrame]
+                               , Iterable[dict[str, DataFrame]] ]:
     &#34;&#34;&#34;
     Passes the given netlists to spectre instances and reads the results in.
     &#34;&#34;&#34;
-    num = len(netlist) if isinstance(netlist, Iterable) else 1
+    num = 1 if isinstance(netlist, str) else len(netlist)
     return _run(num, core.simulate_netlist, netlist, includes, raw_path)</code></pre>
 </details>
 </dd>
@@ -299,7 +302,7 @@ def stop_session( session: Union[core.Session,Iterable[core.Session]]
     &#34;&#34;&#34;
     Start spectre interactive session(s)
     &#34;&#34;&#34;
-    num = len(net_path) if isinstance(net_path, Iterable) and not isinstance(net_path, str) else 1
+    num = 1 if isinstance(net_path, str) else len(net_path)
     raws = num * [raw_path] if num &gt; 1 else raw_path
     return _run(num, core.start_session, net_path, includes, raws)</code></pre>
 </details>
