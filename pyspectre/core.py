@@ -5,7 +5,7 @@ import re
 import tempfile
 import errno
 import warnings
-from typing import NamedTuple
+from typing import NamedTuple, NewType
 import pexpect
 import pandas as pd
 import pynut as pn
@@ -51,13 +51,14 @@ def simulate_netlist(netlist: str, **kwargs) -> pn.NutMeg:
     _    = os.remove(path)
     return ret
 
+REPL    = NewType('REPL', pexpect.spawn)
 Session = NamedTuple( 'Session'
                     , [ ( 'net_file', str)
                       , ( 'raw_file', str)
-                      , ( 'repl', pexpect.spawn)
-                      , ( 'prompt', str )
-                      , ( 'succ', str )
-                      , ( 'fail', str ) ]
+                      , ( 'repl'    , REPL)
+                      , ( 'prompt'  , str )
+                      , ( 'succ'    , str )
+                      , ( 'fail'    , str ) ]
                     ,  )
 
 def start_session( net_path: str, includes: list[str] = None
