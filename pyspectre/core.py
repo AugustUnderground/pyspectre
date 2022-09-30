@@ -2,22 +2,21 @@
 
 import os
 import re
-from tempfile import NamedTemporaryFile
+from   subprocess      import run, DEVNULL
+from   tempfile        import NamedTemporaryFile
 import errno
 import warnings
-from typing import NamedTuple, NewType
+from   collections.abc import Iterable
+from   typing          import NamedTuple, NewType
 import pexpect
-import pandas as pd
-import pynut as pn
+from   pandas          import DataFrame
+from   pynut           import read_raw, plot_dict
 
 def netlist_to_tmp(netlist: str) -> str:
     """
     Write a netlist to a temporary file
     """
-    tmp  = NamedTemporaryFile( mode   = 'w'
-                             , suffix = '.scs'
-                             , delete = False
-                             , )
+    tmp  = NamedTemporaryFile(mode = 'w', suffix = '.scs', delete = False)
     path = tmp.name
     tmp.write(netlist)
     tmp.close()
@@ -34,34 +33,53 @@ def raw_tmp(net_path: str) -> str:
     tmp.close()
     return path
 
-def simulate( netlist_path: str, includes: list[str] = None
-            , raw_path: str = None ) -> pn.NutMeg:
+def read_results(raw_file: str) -> dict[str, DataFrame]:
+    """
+    Read simulation results
+    """
+    if not os.path.isfile(raw_file):
+        raise(FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT), raw_file))
+    if not os.access(raw_file, os.R_OK):
+        raise(PermissionError(errno.EACCES, os.strerror(errno.EACCES), raw_file))
+
+    return plot_dict(read_raw(raw_file))
+
+def simulate( netlist_path: str, includes: Iterable[str] = None
+            , raw_path: str = None ) -> dict[str, DataFrame]:
     """
     Passes the given netlist path to spectre and reads the results in.
     """
     net = os.path.expanduser(netlist_path)
-    inc = '' if not includes else '-I' + ' -I'.join(map(os.path.expanduser, includes))
+    inc = [f'-I{os.path.expanduser(i)}' for i in includes]
     raw = raw_path or raw_tmp(net)
-    cmd = f'spectre -64 -format nutbin -raw {raw} -log {inc} {net}'
+    cmd = ['spectre', '-64', '-format nutbin', f'-raw {raw}', '-log'
+          ] + inc + [net]
 
     if not os.path.isfile(net):
         raise(FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT), net))
     if not os.access(net, os.R_OK):
         raise(PermissionError(errno.EACCES, os.strerror(errno.EACCES), net))
 
-    ret = os.system(cmd)
+    #ret = os.system(cmd)
+    ret = run( cmd
+             , check          = False
+             , stdin          = DEVNULL
+             , stdout         = DEVNULL
+             , stderr         = DEVNULL
+             , capture_output = False
+             , ).returncode
 
     if ret != 0:
-        raise(IOError( errno.EIO, os.strerror(errno.EIO), 'spectre'))
+        raise(IOError(errno.EIO, os.strerror(errno.EIO), 'spectre'))
 
     if not os.path.isfile(raw):
         raise(FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT), raw))
     if not os.access(raw, os.R_OK):
         raise(PermissionError(errno.EACCES, os.strerror(errno.EACCES), raw))
 
-    return pn.read_raw(raw)
+    return read_results(raw)
 
-def simulate_netlist(netlist: str, **kwargs) -> pn.NutMeg:
+def simulate_netlist(netlist: str, **kwargs) -> dict[str, DataFrame]:
     """
     Takes a netlist as text, creates a temporary file and simulates it. The
     results are read in and all temp files will be destroyed.
@@ -116,23 +134,12 @@ def run_command(session: Session, command: str) -> bool:
     session.repl.sendline(command)
     return session.repl.expect(session.prompt) == 0
 
-def read_results(session: Session) -> dict[str, pd.DataFrame]:
-    """
-    Read simulation results
-    """
-    if not os.path.isfile(session.raw_file):
-        raise(FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT), session.raw_file))
-    if not os.access(session.raw_file, os.R_OK):
-        raise(PermissionError(errno.EACCES, os.strerror(errno.EACCES), session.raw_file))
-
-    return pn.plot_dict(pn.read_raw(session.raw_file))
-
-def run_all(session: Session) -> dict[str, pd.DataFrame]:
+def run_all(session: Session) -> dict[str, DataFrame]:
     """
     Run all simulation analyses
     """
     run_command(session, '(sclRun "all")')
-    return read_results(session)
+    return read_results(session.raw_file)
 
 def get_analyses(session: Session) -> dict[str, str]:
     """
@@ -143,13 +150,13 @@ def get_analyses(session: Session) -> dict[str, str]:
     out = session.repl.before.decode('utf-8').split('\n')[1:-1]
     return dict([re.search(r'"(.+)"\s*"(.+)"', o).groups() for o in out])
 
-def run_analysis(session: Session, analysis: str) -> dict[str, pd.DataFrame]:
+def run_analysis(session: Session, analysis: str) -> dict[str, DataFrame]:
     """
     Run only the given analysis.
     """
     cmd = f'(sclRunAnalysis (sclGetAnalysis "{analysis}"))'
     run_command(session, cmd)
-    return read_results(session)
+    return read_results(session.raw_file)
 
 def set_parameter(session: Session, param: str, value: float) -> bool:
     """
@@ -170,9 +177,10 @@ def get_parameter(session: Session, param: str) -> float:
     Get a parameter in the netlist.
     """
     cmd = f'(sclGetAttribute (sclGetParameter (sclGetCircuit "") "{param}") "value")'
-    return run_command(session, cmd)
+    run_command(session, cmd)
+    return float(session.repl.before.decode('utf-8').split('\n')[-1])
 
-def get_parameters(session: Session, params: list[str]) -> dict[str, float]:
+def get_parameters(session: Session, params: Iterable[str]) -> dict[str, float]:
     """
     Get a set of parameters in the netlist.
     """
