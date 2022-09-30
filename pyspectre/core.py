@@ -2,7 +2,7 @@
 
 import os
 import re
-import tempfile
+from tempfile import NamedTemporaryFile
 import errno
 import warnings
 from typing import NamedTuple, NewType
@@ -14,13 +14,24 @@ def netlist_to_tmp(netlist: str) -> str:
     """
     Write a netlist to a temporary file
     """
-    with tempfile.NamedTemporaryFile( mode   = 'w'
-                                    , suffix = '.scs'
-                                    , delete = False
-                                    , ) as tmp:
-        path = tmp.name
-        _    = tmp.write(netlist)
-        _    = tmp.close
+    tmp  = NamedTemporaryFile( mode   = 'w'
+                             , suffix = '.scs'
+                             , delete = False
+                             , )
+    path = tmp.name
+    tmp.write(netlist)
+    tmp.close()
+    return path
+
+def raw_tmp(net_path: str) -> str:
+    """
+    Raw simulation results in /tmp
+    """
+    pre  = f'{os.path.splitext(os.path.basename(net_path))[0]}'
+    suf  = '.raw'
+    tmp  = NamedTemporaryFile(prefix = pre, suffix = suf, delete = False)
+    path = tmp.name
+    tmp.close()
     return path
 
 def simulate( netlist_path: str, includes: list[str] = None
@@ -28,9 +39,16 @@ def simulate( netlist_path: str, includes: list[str] = None
     """
     Passes the given netlist path to spectre and reads the results in.
     """
-    inc = '' if not includes else '-I' + ' -I'.join(includes)
-    raw = raw_path or f'{os.path.splitext(os.path.basename(netlist_path))[0]}.raw'
-    cmd = f'spectre -64 -format nutbin -raw {raw} -log {inc} {netlist_path}'
+    net = os.path.expanduser(netlist_path)
+    inc = '' if not includes else '-I' + ' -I'.join(map(os.path.expanduser, includes))
+    raw = raw_path or raw_tmp(net)
+    cmd = f'spectre -64 -format nutbin -raw {raw} -log {inc} {net}'
+
+    if not os.path.isfile(net):
+        raise(FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT), net))
+    if not os.access(net, os.R_OK):
+        raise(PermissionError(errno.EACCES, os.strerror(errno.EACCES), net))
+
     ret = os.system(cmd)
 
     if ret != 0:
@@ -38,8 +56,10 @@ def simulate( netlist_path: str, includes: list[str] = None
 
     if not os.path.isfile(raw):
         raise(FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT), raw))
+    if not os.access(raw, os.R_OK):
+        raise(PermissionError(errno.EACCES, os.strerror(errno.EACCES), raw))
 
-    return raw
+    return pn.read_raw(raw)
 
 def simulate_netlist(netlist: str, **kwargs) -> pn.NutMeg:
     """
@@ -66,19 +86,21 @@ def start_session( net_path: str, includes: list[str] = None
     """
     Start spectre interactive session
     """
-    if not os.path.isfile(net_path):
-        raise(FileNotFoundError( errno.ENOENT
-                               , os.strerror(errno.ENOENT)
-                               , net_path ))
-
     prompt = '\r\n>\s'
     succ   = '.*\nt'
     fail   = '.*\nnil'
-    raw    = raw_path or f'{os.path.splitext(os.path.basename(net_path))[0]}.raw'
-    inc    = [] if not includes else [f'-I{i}' for i in includes]
+    net    = os.path.expanduser(net_path)
+    raw    = raw_path or raw_tmp(net)
+    inc    = [] if not includes else [f'-I{os.path.expanduser(i)}' for i in includes]
     cmd    = 'spectre'
     args   = ['-64', '+interactive', '-format nutbin', f'-raw {raw}', '-log'
-             ] + inc + [net_path]
+             ] + inc + [net]
+
+    if not os.path.isfile(net):
+        raise(FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT), net))
+    if not os.access(net, os.R_OK):
+        raise(PermissionError(errno.EACCES, os.strerror(errno.EACCES), net))
+
     repl   = pexpect.spawn(cmd, args)
 
     if repl.expect(prompt) != 0:
@@ -99,9 +121,9 @@ def read_results(session: Session) -> dict[str, pd.DataFrame]:
     Read simulation results
     """
     if not os.path.isfile(session.raw_file):
-        raise(FileNotFoundError( errno.ENOENT
-                               , os.strerror(errno.ENOENT)
-                               , session.raw_file ))
+        raise(FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT), session.raw_file))
+    if not os.access(session.raw_file, os.R_OK):
+        raise(PermissionError(errno.EACCES, os.strerror(errno.EACCES), session.raw_file))
 
     return pn.plot_dict(pn.read_raw(session.raw_file))
 
