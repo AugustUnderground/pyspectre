@@ -81,6 +81,17 @@ def start_session( net_path: Union[str, Iterable[str]]
     raws = num * [raw_path] if num &gt; 1 else raw_path
     return _run(num, core.start_session, net_path, includes, raws)
 
+def start_n_sessions( net_path: str, includes: Iterable[str] = None
+                    , raw_path: str = None, num: int = 1
+                    ) -&gt; Iterable[core.Session]:
+    &#34;&#34;&#34;
+    Start n parallel sessions with the same netlist
+    &#34;&#34;&#34;
+    nets = num * [net_path]
+    incs = num * [includes]
+    raws = num * [raw_path]
+    return start_session(nets, incs, raws)
+
 def run_all( session: Union[core.Session, Iterable[core.Session]]
            ) -&gt; Union[ dict[str, DataFrame]
                      , Iterable[dict[str, DataFrame]] ]:
@@ -127,12 +138,14 @@ def get_parameters( session: Union[core.Session, Iterable[core.Session]]
     return _run(num, core.get_parameters, session, params)
 
 def stop_session( session: Union[core.Session,Iterable[core.Session]]
+                , remove_raw: bool = True
                 ) -&gt; Union[bool, Iterable[bool]]:
     &#34;&#34;&#34;
     Stop spectre interactive session(s)
     &#34;&#34;&#34;
     num = 1 if isinstance(session, core.Session) else len(session)
-    return _run(num, core.stop_session, session)</code></pre>
+    rem  = num * [remove_raw] if num &gt; 1 else remove_raw
+    return _run(num, core.stop_session, session, rem)</code></pre>
 </details>
 </section>
 <section>
@@ -286,6 +299,27 @@ def stop_session( session: Union[core.Session,Iterable[core.Session]]
     return _run(num, core.simulate_netlist, netlist, includes, raw_path)</code></pre>
 </details>
 </dd>
+<dt id="pyspectre.start_n_sessions"><code class="name flex">
+<span>def <span class="ident">start_n_sessions</span></span>(<span>net_path: str, includes: collections.abc.Iterable[str] = None, raw_path: str = None, num: int = 1) ‑> collections.abc.Iterable[<a title="pyspectre.core.Session" href="core.html#pyspectre.core.Session">Session</a>]</span>
+</code></dt>
+<dd>
+<div class="desc"><p>Start n parallel sessions with the same netlist</p></div>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def start_n_sessions( net_path: str, includes: Iterable[str] = None
+                    , raw_path: str = None, num: int = 1
+                    ) -&gt; Iterable[core.Session]:
+    &#34;&#34;&#34;
+    Start n parallel sessions with the same netlist
+    &#34;&#34;&#34;
+    nets = num * [net_path]
+    incs = num * [includes]
+    raws = num * [raw_path]
+    return start_session(nets, incs, raws)</code></pre>
+</details>
+</dd>
 <dt id="pyspectre.start_session"><code class="name flex">
 <span>def <span class="ident">start_session</span></span>(<span>net_path: Union[str, collections.abc.Iterable[str]], includes: Union[collections.abc.Iterable[str], collections.abc.Iterable[collections.abc.Iterable[str]]] = None, raw_path: Union[str, collections.abc.Iterable[str]] = None) ‑> Union[<a title="pyspectre.core.Session" href="core.html#pyspectre.core.Session">Session</a>, collections.abc.Iterable[<a title="pyspectre.core.Session" href="core.html#pyspectre.core.Session">Session</a>]]</span>
 </code></dt>
@@ -308,7 +342,7 @@ def stop_session( session: Union[core.Session,Iterable[core.Session]]
 </details>
 </dd>
 <dt id="pyspectre.stop_session"><code class="name flex">
-<span>def <span class="ident">stop_session</span></span>(<span>session: Union[<a title="pyspectre.core.Session" href="core.html#pyspectre.core.Session">Session</a>, collections.abc.Iterable[<a title="pyspectre.core.Session" href="core.html#pyspectre.core.Session">Session</a>]]) ‑> Union[bool, collections.abc.Iterable[bool]]</span>
+<span>def <span class="ident">stop_session</span></span>(<span>session: Union[<a title="pyspectre.core.Session" href="core.html#pyspectre.core.Session">Session</a>, collections.abc.Iterable[<a title="pyspectre.core.Session" href="core.html#pyspectre.core.Session">Session</a>]], remove_raw: bool = True) ‑> Union[bool, collections.abc.Iterable[bool]]</span>
 </code></dt>
 <dd>
 <div class="desc"><p>Stop spectre interactive session(s)</p></div>
@@ -317,12 +351,14 @@ def stop_session( session: Union[core.Session,Iterable[core.Session]]
 <span>Expand source code</span>
 </summary>
 <pre><code class="python">def stop_session( session: Union[core.Session,Iterable[core.Session]]
+                , remove_raw: bool = True
                 ) -&gt; Union[bool, Iterable[bool]]:
     &#34;&#34;&#34;
     Stop spectre interactive session(s)
     &#34;&#34;&#34;
     num = 1 if isinstance(session, core.Session) else len(session)
-    return _run(num, core.stop_session, session)</code></pre>
+    rem  = num * [remove_raw] if num &gt; 1 else remove_raw
+    return _run(num, core.stop_session, session, rem)</code></pre>
 </details>
 </dd>
 </dl>
@@ -350,6 +386,7 @@ def stop_session( session: Union[core.Session,Iterable[core.Session]]
 <li><code><a title="pyspectre.set_parameters" href="#pyspectre.set_parameters">set_parameters</a></code></li>
 <li><code><a title="pyspectre.simulate" href="#pyspectre.simulate">simulate</a></code></li>
 <li><code><a title="pyspectre.simulate_netlists" href="#pyspectre.simulate_netlists">simulate_netlists</a></code></li>
+<li><code><a title="pyspectre.start_n_sessions" href="#pyspectre.start_n_sessions">start_n_sessions</a></code></li>
 <li><code><a title="pyspectre.start_session" href="#pyspectre.start_session">start_session</a></code></li>
 <li><code><a title="pyspectre.stop_session" href="#pyspectre.stop_session">stop_session</a></code></li>
 </ul>

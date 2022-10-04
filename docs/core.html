@@ -215,7 +215,7 @@ def get_parameters(session: Session, params: Iterable[str]) -&gt; dict[str, floa
     &#34;&#34;&#34;
     return {param: get_parameter(session, param) for param in params}
 
-def stop_session(session) -&gt; bool:
+def stop_session(session, remove_raw: bool = False) -&gt; bool:
     &#34;&#34;&#34;
     Quit spectre interactive session and close terminal
     &#34;&#34;&#34;
@@ -226,6 +226,8 @@ def stop_session(session) -&gt; bool:
             warnings.warn( &#39;spectre refused to exit gracefully, forcing ...&#39;
                          , RuntimeWarning )
             session.repl.terminate(force = True)
+    if remove_raw:
+        os.remove(session.raw_file)
     return not session.repl.isalive()</code></pre>
 </details>
 </section>
@@ -544,7 +546,7 @@ results are read in and all temp files will be destroyed.</p></div>
 </details>
 </dd>
 <dt id="pyspectre.core.stop_session"><code class="name flex">
-<span>def <span class="ident">stop_session</span></span>(<span>session) ‑> bool</span>
+<span>def <span class="ident">stop_session</span></span>(<span>session, remove_raw: bool = False) ‑> bool</span>
 </code></dt>
 <dd>
 <div class="desc"><p>Quit spectre interactive session and close terminal</p></div>
@@ -552,7 +554,7 @@ results are read in and all temp files will be destroyed.</p></div>
 <summary>
 <span>Expand source code</span>
 </summary>
-<pre><code class="python">def stop_session(session) -&gt; bool:
+<pre><code class="python">def stop_session(session, remove_raw: bool = False) -&gt; bool:
     &#34;&#34;&#34;
     Quit spectre interactive session and close terminal
     &#34;&#34;&#34;
@@ -563,6 +565,8 @@ results are read in and all temp files will be destroyed.</p></div>
             warnings.warn( &#39;spectre refused to exit gracefully, forcing ...&#39;
                          , RuntimeWarning )
             session.repl.terminate(force = True)
+    if remove_raw:
+        os.remove(session.raw_file)
     return not session.repl.isalive()</code></pre>
 </details>
 </dd>
