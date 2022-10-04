@@ -99,7 +99,7 @@ Session = NamedTuple( 'Session'
                       , ( 'fail'    , str ) ]
                     ,  )
 
-def start_session( net_path: str, includes: list[str] = None
+def start_session( net_path: str, includes: Iterable[str] = None
                  , raw_path: str = None ) -> Session:
     """
     Start spectre interactive session
