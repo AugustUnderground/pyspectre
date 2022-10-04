@@ -49,8 +49,20 @@ def start_session( net_path: Union[str, Iterable[str]]
     Start spectre interactive session(s)
     """
     num = 1 if isinstance(net_path, str) else len(net_path)
-    raws = num * [raw_path] if num > 1 else raw_path
+    raws = num * [raw_path] if (isinstance(raw_path, str) and num > 1) else raw_path
     return _run(num, core.start_session, net_path, includes, raws)
+
+def start_n_sessions( net_path: str, includes: Iterable[str] = None
+                    , raw_path: str = None, num: int = 1
+                    ) -> Iterable[core.Session]:
+    """
+    Start n parallel sessions with the same netlist
+    """
+    nets = num * [net_path] if num > 1 else net_path
+    incs = num * [includes] if (num > 1 and includes) else \
+            (num * [[None]] if num > 1 else includes)
+    raws = num * [raw_path] if num > 1 else raw_path
+    return start_session(nets, incs, raws)
 
 def run_all( session: Union[core.Session, Iterable[core.Session]]
            ) -> Union[ dict[str, DataFrame]
