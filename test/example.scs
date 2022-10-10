@@ -1,0 +1,129 @@
+// Single-Ended Operational Amplifier Characterization Testbench
+
+simulator lang=spectre
+global 0
+
+// include "/opt/pdk/gpdk180_v3.3/models/spectre/gpdk.scs" section=stat
+include "gpdk.scs" section=stat
+
+parameters a0=1 fin=1k vi=0 vcm=0 vo=0 vid=0 vicm=0
+
+parameters cl=5.0e-12 i0=3.0e-6 rl=1.0e8 vs=0.5 vdd=1.8 scl=1.0
+
+parameters Lcm1=180n Ldp1=180n Lcm2=180n Lcm3=180n Lcm4=180n \
+           Wcm1=2.0u Wdp1=2.0u Wcm2=2.0u Wcm3=2.0u Wcm4=2.0u \
+           Mcm11=2   Mdp11=2   Mcm21=2   Mcm31=2   Mcm41=2   \
+           Mcm12=2   Mdp12=2   Mcm22=4   Mcm32=4   Mcm42=2
+
+subckt ideal_balun d c p n
+    K0 (d 0 p c) transformer n1=2
+    K1 (d 0 c n) transformer n1=2
+ends ideal_balun
+
+VSUPP (VDD CM)  vsource dc=vdd/2 type=dc
+VSUPN (CM  VSS) vsource dc=vdd/2 type=dc
+IREF  (VDD B)   isource dc=i0    type=dc
+VCM   (CM  0)   vsource dc=0     type=dc
+
+DUT (B INP INN OUT VDD VSS) op
+
+OUTIDEAL (OUT_IDEAL 0  INP 0) vcvs gain=1/a0
+
+INPSW (INP ICLPULSE ICLSIN INPOL) switch position=1
+INNSW (INN FBB             INNOL) switch position=1
+OUTSW (OF  OFL             OUT)   switch position=1
+
+IPRB0 (FBA FBB)       iprobe
+FBNET (FBA CM OUT CM) vcvs gain=a0
+
+VIPULSE (ICLPULSE CM) vsource type=pulse dc=vid \
+                      val0=-vs/2 val1=vs/2 period=100u delay=5u rise=1n
+VISIN   (ICLSIN   CM) vsource type=sine ampl=a0 freq=fin
+ 
+CL (OUT CM) capacitor c=cl
+RL (OUT CM) resistor  r=rl
+
+VO (OFI CM) vsource  dc=vo type=dc
+L2 (OFI OF) dcfeed   l=1u
+R2 (OFL CM) resistor r=1M
+
+BALUN (IND INCM INPOL INNOL) ideal_balun
+
+VID  (IND  CM) vsource type=dc dc=vid mag=1
+VICM (INCM CM) vsource type=dc dc=vicm
+
+subckt op B INP INN O VDD VSS
+    MNCM11 (B  B   VSS VSS) nmos1 m=Mcm11 w=Wcm1 l=Lcm1
+    MNCM12 (CM B   VSS VSS) nmos1 m=Mcm12 w=Wcm1 l=Lcm1
+
+    MNDP11 (Y  INN CM  VSS) nmos1 m=Mdp11 w=Wdp1 l=Ldp1
+    MNDP12 (X  INP CM  VSS) nmos1 m=Mdp12 w=Wdp1 l=Ldp1
+
+    MPCM21 (Y  Y   VDD VDD) pmos1 m=Mcm21 w=Wcm2 l=Lcm2
+    MPCM22 (Z  Y   VDD VDD) pmos1 m=Mcm22 w=Wcm2 l=Lcm2
+
+    MPCM31 (X  X   VDD VDD) pmos1 m=Mcm31 w=Wcm3 l=Lcm3
+    MPCM32 (O  X   VDD VDD) pmos1 m=Mcm32 w=Wcm3 l=Lcm3
+
+    MNCM41 (Z  Z   VSS VSS) nmos1 m=Mcm41 w=Wcm4 l=Lcm4
+    MNCM42 (O  Z   VSS VSS) nmos1 m=Mcm42 w=Wcm4 l=Lcm4
+ends op
+
+
+simulatorOptions options reltol=100e-6 vabstol=1e-6 iabstol=1e-12 temp=27   \
+                         tnom=27 homotopy=all gmin=1e-12 rforce=1           \
+                         save=selected dc_pivot_check=yes scale=scl
+
+save DUT.M*.m1:gm     \
+  DUT.M*.m1:gds       \
+  DUT.M*.m1:id        \
+  DUT.M*.m1:gmoverid  \
+  DUT.M*.m1:fug       \
+  DUT.M*.m1:vdsat     \
+  DUT.M*.m1:vgs       \
+  DUT.M*.m1:vds       \
+  DUT.M*.m1:vbs       \
+  DUT.M*.m1:gmb       \
+  DUT.M*.m1:vth       \
+  DUT.M*.m1:self_gain \
+    
+save DUT.X DUT.Y DUT.Z DUT.B DUT.CM DUT:O DUT:VDD DUT:VSS \
+     INN INP OUT OUT_IDEAL VDD VSS
+
+fb1 alter dev=INPSW param=position value=1
+fb2 alter dev=INNSW param=position value=1
+fb3 alter dev=OUTSW param=position value=1
+fb4 alter param=vid value=0
+fb5 alter param=vo value=0
+fb6 alter param=a0 value=1
+
+dcop dc save=selected title="dcop"
+
+dcmatch (OUT CM) dcmatch mth=0.9 method=statistics nsigma=1 title="dcmatch" \
+                         variations=mismatch where=rawfile prevoppoint=yes
+
+stb stb start=1 stop=100G probe=IPRB0 localgnd=0 dec=50 title="stb"
+
+tran tran stop=100u errpreset=conservative title="tran"
+
+noise (OUT CM) noise start=1e-3 stop=1G iprobe=VIPULSE             \
+               separatenoise=no save=selected title="noise"
+
+fb7 alter param=a0 value=0.1
+dc1 dc param=vid start=-vdd*0.1 stop=vdd*0.1 lin=500 title="dc1"
+
+ol1 alter dev=INNSW param=position value=2
+ol2 alter dev=INPSW param=position value=3
+ol3 alter dev=OUTSW param=position value=2
+
+xf (OUT CM) xf  start=1e-3 stop=1G dec=50 title="xf" annotate=no
+
+ac ac freq=1 param=vicm start=-vdd stop=vdd lin=1500 title="ac" annotate=no
+
+ol41 alter param=vid value=vs/2 
+ol42 alter param=vo value=-vdd/2
+dc3 dc title="dc3"
+
+ol51 alter param=vid value=-vs/2
+ol52 alter param=vo value=vdd/2
+dc4 dc title="dc4"
