@@ -50,7 +50,8 @@ def start_session( net_path: Union[str, Iterable[str]]
     """
     num  = 1 if isinstance(net_path, str) else len(net_path)
     incs = num * [includes] if (num > 1 and includes and isinstance(includes[0], str)) \
-            else (includes if includes and len(includes) == num else num * [None])
+            else (num * [None] if num > 1 else None)
+            # else (includes if includes and len(includes) == num else num * [None])
     raws = num * [raw_path] if (num > 1 and isinstance(raw_path, str)) \
             else (num * [None] if (not raw_path and num > 1) else raw_path)
     return _run(num, core.start_session, net_path, incs, raws)
