@@ -49,9 +49,10 @@ def start_session( net_path: Union[str, Iterable[str]]
     Start spectre interactive session(s)
     """
     num  = 1 if isinstance(net_path, str) else len(net_path)
-    raws = num * [raw_path] if (isinstance(raw_path, str) and num > 1) else raw_path
-    incs = num * [includes] if (includes and num > 1) else \
-            (num * [None] if num > 1 else includes)
+    incs = num * [includes] if (num > 1 and includes and isinstance(includes[0], str)) \
+            else (includes if includes and len(includes) == num else num * [None])
+    raws = num * [raw_path] if (num > 1 and isinstance(raw_path, str)) \
+            else (num * [None] if (not raw_path and num > 1) else raw_path)
     return _run(num, core.start_session, net_path, incs, raws)
 
 # def start_n_sessions( net_path: str, includes: Iterable[str] = None

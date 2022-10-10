@@ -45,15 +45,17 @@ def read_results(raw_file: str) -> dict[str, DataFrame]:
     return plot_dict(read_raw(raw_file))
 
 def simulate( netlist_path: str, includes: Iterable[str] = None
-            , raw_path: str = None ) -> dict[str, DataFrame]:
+            , raw_path: str = None, log_path: str = None
+            ) -> dict[str, DataFrame]:
     """
     Passes the given netlist path to spectre and reads the results in.
     """
     net = os.path.expanduser(netlist_path)
-    inc = [f'-I{os.path.expanduser(i)}' for i in includes]
+    inc = [f'-I{os.path.expanduser(i)}' for i in includes] if includes else []
     raw = raw_path or raw_tmp(net)
-    cmd = ['spectre', '-64', '-format nutbin', f'-raw {raw}', '-log'
-          ] + inc + [net]
+    log = [f'=log {log_path}'] if not log_path else ['-log']
+    cmd = ['spectre', '-64', '-format nutbin', f'-raw {raw}' #, '-log'
+          ] + log + inc + [net]
 
     if not os.path.isfile(net):
         raise(FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT), net))
@@ -70,7 +72,16 @@ def simulate( netlist_path: str, includes: Iterable[str] = None
              , ).returncode
 
     if ret != 0:
-        raise(IOError(errno.EIO, os.strerror(errno.EIO), 'spectre'))
+        if log_path:
+            with open(log_path, 'r', encoding = 'utf-8') as log_handle:
+                print(log_handle.read())
+        else:
+            print( 'log_path was not specified, '
+                 + 're-run the simulation with a log_path to view error details.' )
+
+        raise(IOError( errno.EIO, os.strerror(errno.EIO)
+                     , f'spectre returned with non-zero exit code: {ret}'
+                     , ))
 
     if not os.path.isfile(raw):
         raise(FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT), raw))
@@ -132,7 +143,12 @@ def run_command(session: Session, command: str) -> bool:
     false based on what the previous command returned.
     """
     session.repl.sendline(command)
-    return session.repl.expect(session.prompt) == 0
+    ret = session.repl.expect(session.prompt)
+
+    if ret != 0:
+        warnings.warn('spectre might have crashed ... ', RuntimeWarning)
+
+    return ret == 0
 
 def run_all(session: Session) -> dict[str, DataFrame]:
     """
