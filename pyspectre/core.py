@@ -131,6 +131,8 @@ def start_session( net_path: str, includes: Iterable[str] = None
         raise(PermissionError(errno.EACCES, os.strerror(errno.EACCES), net))
 
     repl   = pexpect.spawn(cmd, args)
+    repl.delaybeforesend = 0.0001
+    repl.delayafterread  = 0.0001
 
     if repl.expect(prompt) != 0:
         raise(IOError(errno.EIO, os.strerror(errno.EIO), cmd))
