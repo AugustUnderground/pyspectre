@@ -215,6 +215,6 @@ def stop_session(session, remove_raw: bool = False) -> bool:
             warnings.warn( 'spectre refused to exit gracefully, forcing ...'
                          , RuntimeWarning )
             session.repl.terminate(force = True)
-    if remove_raw:
+    if remove_raw and os.path.isfile(session.raw_file):
         os.remove(session.raw_file)
     return not session.repl.isalive()
