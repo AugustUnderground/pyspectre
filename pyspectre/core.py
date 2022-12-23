@@ -2,12 +2,13 @@
 
 import os
 import re
-from   subprocess      import run, DEVNULL
+from   subprocess      import run, DEVNULL, Popen
 from   tempfile        import NamedTemporaryFile
 import errno
 import warnings
 from   collections.abc import Iterable
 from   typing          import NamedTuple, NewType
+from   dataclasses     import dataclass
 import pexpect
 from   pandas          import DataFrame
 from   pynut           import read_raw, plot_dict
@@ -33,7 +34,17 @@ def raw_tmp(net_path: str) -> str:
     tmp.close()
     return path
 
-def read_results(raw_file: str) -> dict[str, DataFrame]:
+def log_fifo(log_path: str) -> str:
+    """
+    Create fifo buffer for spectre log file
+    """
+    path  = f'{log_path}.log'
+    mode = 0o600
+    os.mkfifo(path, mode)
+    Popen(f'cat {path} > /dev/null 2>&1 &', shell=True)
+    return path
+
+def read_results(raw_file: str, offset: int = 0) -> dict[str, DataFrame]:
     """
     Read simulation results
     """
@@ -42,7 +53,7 @@ def read_results(raw_file: str) -> dict[str, DataFrame]:
     if not os.access(raw_file, os.R_OK):
         raise(PermissionError(errno.EACCES, os.strerror(errno.EACCES), raw_file))
 
-    return plot_dict(read_raw(raw_file))
+    return plot_dict(read_raw(raw_file, off_set = offset))
 
 def simulate( netlist_path: str, includes: Iterable[str] = None
             , raw_path: str = None, log_path: str = None
@@ -53,8 +64,8 @@ def simulate( netlist_path: str, includes: Iterable[str] = None
     net = os.path.expanduser(netlist_path)
     inc = [f'-I{os.path.expanduser(i)}' for i in includes] if includes else []
     raw = raw_path or raw_tmp(net)
-    log = [f'=log {log_path}'] if not log_path else ['-log']
-    cmd = ['spectre', '-64', '-format nutbin', f'-raw {raw}' #, '-log'
+    log = ['-log']if not log_path else [f'=log {log_path}']
+    cmd = ['spectre', '-64', '-format nutbin', f'-raw {raw}', log
           ] + log + inc + [net]
 
     if not os.path.isfile(net):
@@ -88,7 +99,7 @@ def simulate( netlist_path: str, includes: Iterable[str] = None
     if not os.access(raw, os.R_OK):
         raise(PermissionError(errno.EACCES, os.strerror(errno.EACCES), raw))
 
-    return read_results(raw)
+    return {n: p for n,p in read_results(raw).items() if n != 'offset'}
 
 def simulate_netlist(netlist: str, **kwargs) -> dict[str, DataFrame]:
     """
@@ -101,29 +112,34 @@ def simulate_netlist(netlist: str, **kwargs) -> dict[str, DataFrame]:
     return ret
 
 REPL    = NewType('REPL', pexpect.spawn)
-Session = NamedTuple( 'Session'
-                    , [ ( 'net_file', str)
-                      , ( 'raw_file', str)
-                      , ( 'repl'    , REPL)
-                      , ( 'prompt'  , str )
-                      , ( 'succ'    , str )
-                      , ( 'fail'    , str ) ]
-                    ,  )
+
+@dataclass
+class Session:
+    """ Interactive Spectre Session """
+    net_file: str
+    raw_file: str
+    repl    : REPL
+    prompt  : str
+    succ    : str
+    fail    : str
+    offset  : int
 
 def start_session( net_path: str, includes: Iterable[str] = None
                  , raw_path: str = None ) -> Session:
     """
     Start spectre interactive session
     """
+    offset = 0
     prompt = '\r\n>\s'
     succ   = '.*\nt'
     fail   = '.*\nnil'
     net    = os.path.expanduser(net_path)
     raw    = raw_path or raw_tmp(net)
+    log    = log_fifo(os.path.splitext(raw)[0])
     inc    = [] if not includes else [f'-I{os.path.expanduser(i)}' for i in includes]
     cmd    = 'spectre'
-    args   = ['-64', '+interactive', '-format nutbin', f'-raw {raw}', '-log'
-             ] + inc + [net]
+    args   = ['-64', '+interactive', '-format nutbin', f'-raw {raw}'
+             , f'=log {log}' ] + inc + [net]
 
     if not os.path.isfile(net):
         raise(FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT), net))
@@ -131,13 +147,13 @@ def start_session( net_path: str, includes: Iterable[str] = None
         raise(PermissionError(errno.EACCES, os.strerror(errno.EACCES), net))
 
     repl   = pexpect.spawn(cmd, args, timeout = 120)
-    repl.delaybeforesend = 0.0001
-    repl.delayafterread  = 0.0001
+    repl.delaybeforesend = 0.001
+    repl.delayafterread  = 0.001
 
     if repl.expect(prompt) != 0:
         raise(IOError(errno.EIO, os.strerror(errno.EIO), cmd))
 
-    return Session(net_path, raw, repl, prompt, succ, fail)
+    return Session(net_path, raw, repl, prompt, succ, fail, offset)
 
 def run_command(session: Session, command: str) -> bool:
     """
@@ -157,7 +173,9 @@ def run_all(session: Session) -> dict[str, DataFrame]:
     Run all simulation analyses
     """
     run_command(session, '(sclRun "all")')
-    return read_results(session.raw_file)
+    res = read_results(session.raw_file, offset = session.offset)
+    session.offset = res.get('offset', 0)
+    return {n: p for n,p in res.items() if n != 'offset'}
 
 def get_analyses(session: Session) -> dict[str, str]:
     """
