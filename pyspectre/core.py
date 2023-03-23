@@ -65,7 +65,7 @@ def simulate( netlist_path: str, includes: Iterable[str] = None
     inc = [f'-I{os.path.expanduser(i)}' for i in includes] if includes else []
     raw = raw_path or raw_tmp(net)
     log = ['-log']if not log_path else [f'=log {log_path}']
-    cmd = ['spectre', '-64', '-format nutbin', f'-raw {raw}', log
+    cmd = ['spectre', '-64', '-format nutbin', f'-raw {raw}'
           ] + log + inc + [net]
 
     if not os.path.isfile(net):
