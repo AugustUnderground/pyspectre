@@ -2,12 +2,10 @@
 
 import os
 import re
-import subprocess
 from   subprocess      import run, DEVNULL, Popen
 from   tempfile        import NamedTemporaryFile
 import errno
 import warnings
-from   collections.abc import Iterable
 from   typing          import NamedTuple, NewType, List, Dict, Iterable
 
 from   dataclasses     import dataclass
@@ -67,6 +65,7 @@ def simulate( netlist_path: str, includes: List[str] = None
     inc = [f'-I{os.path.expanduser(i)}' for i in includes] if includes else []
     raw = raw_path or raw_tmp(net)
     log = f'{net}.log' if not log_path else f'{log_path}'
+    log_option = f'-log' if not log_path else f'+log'
     #log_path = log
     # These individual arguments cannot be combined with the argument options, those are not recognized
     cmd = ['spectre', '-64', '-format', 'nutbin', '-raw', f'{raw}', '+log', f'{log}'] + inc + [net]
@@ -80,24 +79,19 @@ def simulate( netlist_path: str, includes: List[str] = None
     ret = run( cmd
              , check         =True
              , stdin         =DEVNULL
-             , stdout        =True
-             , stderr        =True
+             , stdout        =DEVNULL
+             , stderr        =DEVNULL
              , capture_output=False
              , ).returncode
 
     if ret != 0:
-        if log_path is not None:
+        if log_path:
             with open(log_path, 'r', encoding='utf-8') as log_handle:
                 print(log_handle.read())
         else:
-            print( '\n\n\n+++++++++++++++++++++++++++++'
-                   'log_path was not specified, '
-                 + f'Using Default log file name {log}\n'
-                   f'+++++++++++++++++++++++++++++++++')
-
-        #raise(IOError( errno.EIO, os.strerror(errno.EIO)
-        #             , f'spectre returned with non-zero exit code: {ret}'
-        #             , ))
+            raise(IOError( errno.EIO, os.strerror(errno.EIO)
+                         , f'spectre returned with non-zero exit code: {ret}'
+                         , ))
     if not os.path.isfile(raw):
         raise(FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT), raw))
     if not os.access(raw, os.R_OK):
@@ -142,13 +136,14 @@ def start_session( net_path: str, includes: List[str] = None
     log    = log_fifo(os.path.splitext(raw)[0])
     inc    = [] if not includes else [f'-I{os.path.expanduser(i)}' for i in includes]
     cmd    = 'spectre'
-    args   = ['-64', '+interactive', '-format', 'nutbin', '-raw', f'{raw}', f'+log', f'{log}'] + inc + [net]
+    args   = ['-64', '+interactive', '-format', 'nutbin', '-raw', f'{raw}'
+                 , f'=log', f'{log}'] + inc + [net]
 
     if not os.path.isfile(net):
         raise(FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT), net))
     if not os.access(net, os.R_OK):
         raise(PermissionError(errno.EACCES, os.strerror(errno.EACCES), net))
-    # Spectre interactive session host handle ?
+
     repl   = pexpect.spawn(cmd, args, timeout = 120)
     repl.delaybeforesend = 0.001
     repl.delayafterread  = 0.001
