@@ -56,7 +56,7 @@ def read_results(raw_file: str, offset: int = 0) -> Dict[str, DataFrame]:
     return plot_dict(read_raw(raw_file, off_set = offset))
 
 def simulate( netlist_path: str, includes: List[str] = None
-            , raw_path: str = None, log_path: str = None
+            , raw_path: str = None, log_path: str = None , log_silent = True
             ) -> Dict[str, DataFrame]:
     """
     Passes the given netlist path to spectre and reads the results in.
@@ -65,10 +65,18 @@ def simulate( netlist_path: str, includes: List[str] = None
     inc = [f'-I{os.path.expanduser(i)}' for i in includes] if includes else []
     raw = raw_path or raw_tmp(net)
     log = f'{net}.log' if not log_path else f'{log_path}'
-    log_option = f'-log' if not log_path else f'+log'
-    #log_path = log
-    # These individual arguments cannot be combined with the argument options, those are not recognized
-    cmd = ['spectre', '-64', '-format', 'nutbin', '-raw', f'{raw}', '+log', f'{log}'] + inc + [net]
+    if log_path and log_silent:
+        log_option = f'=log {log_path}'
+    elif log_path and not log_silent:
+        log_option = f'+log {log_path}'
+    elif (not log_path) and (not log_silent):
+        log_option = '-log'
+    else:
+        buf        = log_fifo(log)
+        log_option = f'=log {buf}'
+
+    cmd = [ 'spectre', '-64', '-format', 'nutbin', '-raw', f'{raw}'
+          ] + [log_option] + inc + [net]
 
     if not os.path.isfile(net):
         raise(FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT), net))
@@ -77,11 +85,11 @@ def simulate( netlist_path: str, includes: List[str] = None
 
     #ret = os.system(cmd)
     ret = run( cmd
-             , check         =True
-             , stdin         =DEVNULL
-             , stdout        =DEVNULL
-             , stderr        =DEVNULL
-             , capture_output=False
+             , check          = True
+             , stdin          = DEVNULL
+             , stdout         = DEVNULL
+             , stderr         = DEVNULL
+             , capture_output = False
              , ).returncode
 
     if ret != 0:
@@ -136,8 +144,8 @@ def start_session( net_path: str, includes: List[str] = None
     log    = log_fifo(os.path.splitext(raw)[0])
     inc    = [] if not includes else [f'-I{os.path.expanduser(i)}' for i in includes]
     cmd    = 'spectre'
-    args   = ['-64', '+interactive', '-format', 'nutbin', '-raw', f'{raw}'
-                 , f'=log', f'{log}'] + inc + [net]
+    args   = [ '-64', '+interactive', '-format', 'nutbin', '-raw', f'{raw}'
+             , f'=log {log}'] + inc + [net]
 
     if not os.path.isfile(net):
         raise(FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT), net))
