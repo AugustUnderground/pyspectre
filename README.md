@@ -2,8 +2,9 @@
 
 Python interface to Cadence Spectre.
 
-## Dependencies
+## Dependencies and Requirements
 
+- Python 3.9
 - [pynut](https://github.com/augustunderground/pynut).
 - [Cadence Spectre](https://www.cadence.com/en_US/home/tools/custom-ic-analog-rf-design/circuit-simulation/spectre-simulation-platform.html), the `spectre` command should be available in you shell
 
