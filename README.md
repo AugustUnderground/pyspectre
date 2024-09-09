@@ -54,4 +54,4 @@ results  = ps.run_all(session)
 ps.stop_session(session)
 ```
 
-Check `./test/example.py` for more.
+Check `./test/example.py` and `./notebooks/introduction.ipynb` for more.
