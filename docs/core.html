@@ -30,205 +30,945 @@
 <pre><code class="python">&#34;&#34;&#34; Python interface for Cadence Spectre &#34;&#34;&#34;
 
 import os
+import yaml
+from pathlib import Path
 import re
-from   subprocess      import run, DEVNULL
-from   tempfile        import NamedTemporaryFile
+from subprocess import run, DEVNULL, Popen
+from tempfile import NamedTemporaryFile
 import errno
 import warnings
-from   collections.abc import Iterable
-from   typing          import NamedTuple, NewType
+from typing import NamedTuple, NewType, List, Dict, Iterable
+
+from dataclasses import dataclass
 import pexpect
-from   pandas          import DataFrame
-from   pynut           import read_raw, plot_dict
+from pandas import DataFrame
+from pynut import read_raw, plot_dict
+
 
 def netlist_to_tmp(netlist: str) -&gt; str:
     &#34;&#34;&#34;
     Write a netlist to a temporary file
     &#34;&#34;&#34;
-    tmp  = NamedTemporaryFile(mode = &#39;w&#39;, suffix = &#39;.scs&#39;, delete = False)
+    tmp = NamedTemporaryFile(mode=&#39;w&#39;, suffix=&#39;.scs&#39;, delete=False)
     path = tmp.name
     tmp.write(netlist)
     tmp.close()
     return path
 
+
 def raw_tmp(net_path: str) -&gt; str:
     &#34;&#34;&#34;
     Raw simulation results in /tmp
     &#34;&#34;&#34;
-    pre  = f&#39;{os.path.splitext(os.path.basename(net_path))[0]}&#39;
-    suf  = &#39;.raw&#39;
-    tmp  = NamedTemporaryFile(prefix = pre, suffix = suf, delete = False)
+    pre = f&#39;{os.path.splitext(os.path.basename(net_path))[0]}&#39;
+    suf = &#39;.raw&#39;
+    tmp = NamedTemporaryFile(prefix=pre, suffix=suf, delete=False)
     path = tmp.name
     tmp.close()
     return path
 
-def read_results(raw_file: str) -&gt; dict[str, DataFrame]:
+
+def log_fifo(log_path: str) -&gt; str:
+    &#34;&#34;&#34;
+    Create fifo buffer for spectre log file
+    &#34;&#34;&#34;
+    path = f&#39;{log_path}.log&#39;
+    mode = 0o600
+    os.mkfifo(path, mode)
+    Popen(f&#39;cat {path} &gt; /dev/null 2&gt;&amp;1 &amp;&#39;, shell=True)
+    return path
+
+
+def read_results(raw_file: str, offset: int = 0) -&gt; Dict[str, DataFrame]:
     &#34;&#34;&#34;
     Read simulation results
     &#34;&#34;&#34;
     if not os.path.isfile(raw_file):
-        raise(FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT), raw_file))
+        raise (FileNotFoundError(errno.ENOENT,
+               os.strerror(errno.ENOENT), raw_file))
     if not os.access(raw_file, os.R_OK):
-        raise(PermissionError(errno.EACCES, os.strerror(errno.EACCES), raw_file))
+        raise (PermissionError(errno.EACCES, os.strerror(errno.EACCES), raw_file))
 
-    return plot_dict(read_raw(raw_file))
+    return plot_dict(read_raw(raw_file, off_set=offset))
 
-def simulate( netlist_path: str, includes: Iterable[str] = None
-            , raw_path: str = None ) -&gt; dict[str, DataFrame]:
+
+def simulate(netlist_path: str, includes: List[str] = None, raw_path: str = None,
+             log_path: str = None, log_silent=True) -&gt; Dict[str, DataFrame]:
     &#34;&#34;&#34;
     Passes the given netlist path to spectre and reads the results in.
     &#34;&#34;&#34;
     net = os.path.expanduser(netlist_path)
-    inc = [f&#39;-I{os.path.expanduser(i)}&#39; for i in includes]
+    inc = [f&#39;-I{os.path.expanduser(i)}&#39; for i in includes] if includes else []
     raw = raw_path or raw_tmp(net)
-    cmd = [&#39;spectre&#39;, &#39;-64&#39;, &#39;-format nutbin&#39;, f&#39;-raw {raw}&#39;, &#39;-log&#39;
-          ] + inc + [net]
+    log = f&#39;{net}.log&#39; if not log_path else f&#39;{log_path}&#39;
+    if log_path and log_silent:
+        log_option = f&#39;=log {log_path}&#39;
+    elif log_path and not log_silent:
+        log_option = f&#39;+log {log_path}&#39;
+    elif (not log_path) and (not log_silent):
+        log_option = &#39;-log&#39;
+    else:
+        buf = log_fifo(log)
+        log_option = f&#39;=log {buf}&#39;
+
+    cmd = [&#39;spectre&#39;, &#39;-64&#39;, &#39;-format&#39;, &#39;nutbin&#39;, &#39;-raw&#39;, f&#39;{raw}&#39;
+           ] + [log_option] + inc + [net]
 
     if not os.path.isfile(net):
-        raise(FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT), net))
+        raise (FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT), net))
     if not os.access(net, os.R_OK):
-        raise(PermissionError(errno.EACCES, os.strerror(errno.EACCES), net))
+        raise (PermissionError(errno.EACCES, os.strerror(errno.EACCES), net))
 
-    #ret = os.system(cmd)
-    ret = run( cmd
-             , check          = False
-             , stdin          = DEVNULL
-             , stdout         = DEVNULL
-             , stderr         = DEVNULL
-             , capture_output = False
-             , ).returncode
+    # ret = os.system(cmd)
+    ret = run(cmd, check=True, stdin=DEVNULL, stdout=DEVNULL,
+              stderr=DEVNULL, capture_output=False, ).returncode
 
     if ret != 0:
-        raise(IOError(errno.EIO, os.strerror(errno.EIO), &#39;spectre&#39;))
-
+        if log_path:
+            with open(log_path, &#39;r&#39;, encoding=&#39;utf-8&#39;) as log_handle:
+                print(log_handle.read())
+        else:
+            raise (IOError(errno.EIO, os.strerror(errno.EIO),
+                   f&#39;spectre returned with non-zero exit code: {ret}&#39;, ))
     if not os.path.isfile(raw):
-        raise(FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT), raw))
+        raise (FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT), raw))
     if not os.access(raw, os.R_OK):
-        raise(PermissionError(errno.EACCES, os.strerror(errno.EACCES), raw))
+        raise (PermissionError(errno.EACCES, os.strerror(errno.EACCES), raw))
 
-    return read_results(raw)
+    return {n: p for n, p in read_results(raw).items() if n != &#39;offset&#39;}
 
-def simulate_netlist(netlist: str, **kwargs) -&gt; dict[str, DataFrame]:
+
+def simulate_netlist(netlist: str, **kwargs) -&gt; Dict[str, DataFrame]:
     &#34;&#34;&#34;
     Takes a netlist as text, creates a temporary file and simulates it. The
     results are read in and all temp files will be destroyed.
     &#34;&#34;&#34;
     path = netlist_to_tmp(netlist)
-    ret  = simulate(path, **kwargs)
-    _    = os.remove(path)
+    ret = simulate(path, **kwargs)
+    _ = os.remove(path)
     return ret
 
-REPL    = NewType(&#39;REPL&#39;, pexpect.spawn)
-Session = NamedTuple( &#39;Session&#39;
-                    , [ ( &#39;net_file&#39;, str)
-                      , ( &#39;raw_file&#39;, str)
-                      , ( &#39;repl&#39;    , REPL)
-                      , ( &#39;prompt&#39;  , str )
-                      , ( &#39;succ&#39;    , str )
-                      , ( &#39;fail&#39;    , str ) ]
-                    ,  )
 
-def start_session( net_path: str, includes: list[str] = None
-                 , raw_path: str = None ) -&gt; Session:
-    &#34;&#34;&#34;
-    Start spectre interactive session
-    &#34;&#34;&#34;
-    prompt = &#39;\r\n&gt;\s&#39;
-    succ   = &#39;.*\nt&#39;
-    fail   = &#39;.*\nnil&#39;
-    net    = os.path.expanduser(net_path)
-    raw    = raw_path or raw_tmp(net)
-    inc    = [] if not includes else [f&#39;-I{os.path.expanduser(i)}&#39; for i in includes]
-    cmd    = &#39;spectre&#39;
-    args   = [&#39;-64&#39;, &#39;+interactive&#39;, &#39;-format nutbin&#39;, f&#39;-raw {raw}&#39;, &#39;-log&#39;
-             ] + inc + [net]
+REPL = NewType(&#39;REPL&#39;, pexpect.spawn)
 
-    if not os.path.isfile(net):
-        raise(FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT), net))
+
+@dataclass
+class Session:
+    &#34;&#34;&#34;Represents an interactive Spectre session.
+
+    This class encapsulates the state and relevant information for an active
+    Spectre session. It includes details about the netlist and raw output files,
+    the instance managing the interaction with Spectre,
+    and the prompts and patterns used for command success and failure detection.
+
+    Attributes
+    ----------
+    net_file : str
+        The path to the netlist file used in the Spectre session.
+    raw_file : str
+        The path to the raw output file generated by the Spectre session.
+    repl : REPL
+        An instance of the `REPL` class that handles the interactive communication
+        with the Spectre process. This includes sending commands and receiving output.
+    prompt : str
+        The expected prompt string used to detect when the Spectre process is ready
+        to accept the next command.
+    succ : str
+        The regular expression pattern used to identify successful command execution
+        in the Spectre session.
+    fail : str
+        The regular expression pattern used to identify failed command execution
+        in the Spectre session.
+    offset : int
+        The current offset used for reading results from the raw output file. This
+        helps track the position in the file for incremental reads after each analysis.
+    &#34;&#34;&#34;
+    net_file: str
+    raw_file: str
+    repl: REPL
+    prompt: str
+    succ: str
+    fail: str
+    offset: int
+
+
+def get_yaml(file_name: str) -&gt; dict:
+    &#34;&#34;&#34;Load and return a YAML file.
+
+    Parameters
+    ----------
+    file_name : str
+        The name of the YAML file
+
+    Returns
+    -------
+    dict
+        A dictionary containing the configuration data loaded from the YAML file.
+
+    Raises
+    ------
+    FileNotFoundError
+        If the specified configuration file does not exist.
+    &#34;&#34;&#34;
+    config_path = Path(__file__).parent / file_name
+
+    if not config_path.exists():
+        raise FileNotFoundError(f&#34;Configuration file not found: {config_path}&#34;)
+
+    with config_path.open(&#39;r&#39;) as file:
+        return yaml.safe_load(file)
+
+
+def start_session(net_path: str, includes: List[str] = None, raw_path: str = None) -&gt; Session:
+    &#34;&#34;&#34;Start a Spectre interactive session.
+
+    Parameters
+    ----------
+    net_path : str
+        The file path to the netlist that will be used in the Spectre session.
+        This file must exist and be readable.
+    includes : List[str], optional
+        A list of directory paths to be included with the `-I` option in the
+        Spectre command. Each path will be expanded if necessary. Defaults to None.
+    raw_path : str, optional
+        The file path where the raw output will be stored. If not provided,
+        a temporary raw file path is generated based on the netlist file name.
+        Defaults to None.
+
+    Returns
+    -------
+    Session
+        An instance of the `Session` class, representing the active Spectre
+        session, which includes the session&#39;s configuration and the active
+        process handle.
+
+    Raises
+    ------
+    FileNotFoundError
+        If the netlist file specified by `net_path` does not exist.
+
+    PermissionError
+        If the netlist file specified by `net_path` is not readable.
+
+    IOError
+        If the Spectre session fails to start due to an input/output error
+        with the command execution.
+    &#34;&#34;&#34;
+
+    config_dict = get_yaml(&#34;config.yaml&#34;)
+    spectre_args = config_dict[&#39;spectre&#39;][&#39;args&#39;]
+
+    # The command prefex allows for example to run some custom script on the Cadence server before
+    # starting the simulation.
+    command_prefix = config_dict[&#39;spectre&#39;][&#39;command_prefix&#39;]
+    command_postfix = config_dict[&#39;spectre&#39;][&#39;command_postfix&#39;]
+    spectre_executable = config_dict[&#39;spectre&#39;][&#39;executable&#39;]
+
+    offset = 0
+    prompt = r&#39;\r\n&gt;\s&#39;
+    succ = r&#39;.*\nt&#39;
+    fail = r&#39;.*\nnil&#39;
+    net = Path(net_path).expanduser()
+    raw = Path(raw_path) if raw_path else Path(raw_tmp(net))
+    log = log_fifo(raw.with_suffix(&#39;&#39;).as_posix())
+    inc = [f&#39;-I{Path(i).expanduser().as_posix()}&#39; for i in includes] if includes else []
+
+    args = ([spectre_executable] + [net.as_posix()] + inc + [&#39;-raw&#39;, raw.as_posix(), f&#39;=log {log}&#39;]
+            + spectre_args)
+
+    if not net.is_file():
+        raise FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT), net)
     if not os.access(net, os.R_OK):
-        raise(PermissionError(errno.EACCES, os.strerror(errno.EACCES), net))
+        raise PermissionError(errno.EACCES, os.strerror(errno.EACCES), net)
 
-    repl   = pexpect.spawn(cmd, args)
+    command = command_prefix + &#39; &#39;.join(args) + command_postfix
+
+    repl = pexpect.spawn(command, timeout=120)
+    repl.delaybeforesend = 0.001
+    repl.delayafterread = 0.001
 
     if repl.expect(prompt) != 0:
-        raise(IOError(errno.EIO, os.strerror(errno.EIO), cmd))
+        raise IOError(errno.EIO, os.strerror(errno.EIO), command)
 
-    return Session(net_path, raw, repl, prompt, succ, fail)
+    return Session(net_path, raw.as_posix(), repl, prompt, succ, fail, offset)
+
 
 def run_command(session: Session, command: str) -&gt; bool:
-    &#34;&#34;&#34;
-    Internal function for running an arbitrary scl command. Returns True or
-    false based on what the previous command returned.
-    &#34;&#34;&#34;
-    session.repl.sendline(command)
-    return session.repl.expect(session.prompt) == 0
+    &#34;&#34;&#34;Execute an arbitrary SCL command within an active Spectre session.
 
-def run_all(session: Session) -&gt; dict[str, DataFrame]:
+    This internal function sends a specified command to the Spectre process and checks
+    the process&#39;s response. It returns `True` if the command was successful based on
+    the process&#39;s output, and `False` otherwise. If an error is detected, a warning
+    is issued indicating that Spectre might have crashed.
+
+    Parameters
+    ----------
+    session : Session
+        An instance of the `Session` class representing the active Spectre session.
+        The session includes the process handle (`repl`) and expected output prompt.
+    command : str
+        The SCL command to be executed in the Spectre session.
+
+    Returns
+    -------
+    bool
+        `True` if the command was executed successfully (i.e., the expected prompt
+        was received after the command). `False` if the command execution did not
+        result in the expected output.
+
+    Raises
+    ------
+    RuntimeError
+        If the Spectre session is no longer active (i.e., the process has terminated),
+        making it impossible to execute the command.
+
+    Warns
+    -----
+    RuntimeWarning
+        If the Spectre process does not return the expected prompt, indicating that
+        the process might have crashed.
     &#34;&#34;&#34;
-    Run all simulation analyses
+    # The command does not crash if a bracket is missing
+    if not command.count(&#39;(&#39;) == command.count(&#39;)&#39;):
+        raise RuntimeError(f&#34;Syntax Error. Check Brackets in command :{command}&#34;)
+
+    if session.repl.isalive():
+        try:
+            session.repl.sendline(command)
+            ret = session.repl.expect(session.prompt)
+            if ret != 0:
+                warnings.warn(f&#34;Spectre might have crashed while executing command: {command}&#34;,
+                              RuntimeWarning)
+            return ret == 0
+        except pexpect.exceptions.ExceptionPexpect as e:
+            # Handle any unexpected pexpect exceptions
+            error_message = f&#34;An error occurred while executing command &#39;{command}&#39;: {str(e)}&#34;
+            raise RuntimeError(error_message) from e
+    else:
+        raise RuntimeError(&#34;The Spectre session is no longer active. Unable to execute command.&#34;)
+
+
+def run_all(session: Session) -&gt; Dict[str, DataFrame]:
+    &#34;&#34;&#34;Run all simulation analyses in the Spectre session and retrieve the results.
+
+    Parameters
+    ----------
+    session : Session
+        An instance of the `Session` class representing the active Spectre session.
+        The session contains necessary information, including the raw output file
+        and the current offset for reading results.
+
+    Returns
+    -------
+    Dict[str, DataFrame]
+        A dictionary where the keys are the names of the analyses, and the values
+        are pandas DataFrames containing the results of each analysis.
     &#34;&#34;&#34;
     run_command(session, &#39;(sclRun &#34;all&#34;)&#39;)
-    return read_results(session.raw_file)
+    res = read_results(session.raw_file, offset=session.offset)
+    session.offset = res.get(&#39;offset&#39;, 0)
+    return {n: p for n, p in res.items() if n != &#39;offset&#39;}
 
-def get_analyses(session: Session) -&gt; dict[str, str]:
-    &#34;&#34;&#34;
-    Retrieve all simulation analyses from current netlist
-    &#34;&#34;&#34;
-    cmd = &#39;(sclListAnalysis)&#39;
-    run_command(session, cmd)
-    out = session.repl.before.decode(&#39;utf-8&#39;).split(&#39;\n&#39;)[1:-1]
-    return dict([re.search(r&#39;&#34;(.+)&#34;\s*&#34;(.+)&#34;&#39;, o).groups() for o in out])
 
-def run_analysis(session: Session, analysis: str) -&gt; dict[str, DataFrame]:
-    &#34;&#34;&#34;
-    Run only the given analysis.
+def run_analysis(session: Session, analysis: str) -&gt; Dict[str, DataFrame]:
+    &#34;&#34;&#34;Run a specific analysis in the active Spectre session.
+
+    Parameters
+    ----------
+    session : Session
+        An instance of the `Session` class representing the active Spectre session.
+        The session contains necessary information, including the raw output file
+        and the current offset for reading results.
+    analysis : str
+        The name of the analysis to be run. This should correspond to an analysis
+        that is recognized by the Spectre session.
+
+    Returns
+    -------
+    Dict[str, DataFrame]
+        A dictionary where the keys are the names of the analysis results, and the
+        values are pandas DataFrames containing the data from each result.
     &#34;&#34;&#34;
     cmd = f&#39;(sclRunAnalysis (sclGetAnalysis &#34;{analysis}&#34;))&#39;
     run_command(session, cmd)
     return read_results(session.raw_file)
 
+
 def set_parameter(session: Session, param: str, value: float) -&gt; bool:
     &#34;&#34;&#34;
-    Change a parameter in the netlist. Returns True if successful, False
-    otherwise.
+    Change the value of a netlist parameter in the Spectre session.
+
+    This function sends a command to the Spectre session to update the value of
+    a specified parameter in the netlist. It returns `True` if the parameter
+    value was successfully changed, and `False` otherwise.
+
+    Parameters
+    ----------
+    session : Session
+        An instance of the `Session` class representing the active Spectre session.
+        The session contains necessary information, including the raw output file
+        and the current offset for reading results.
+    param : str
+        The name of the netlist parameter whose value is to be changed.
+    value : float
+        The new value to be assigned to the specified parameter.
+
+    Returns
+    -------
+    bool
+        `True` if the parameter value was successfully updated, `False` if the
+        command failed or the parameter could not be changed.
     &#34;&#34;&#34;
     cmd = f&#39;(sclSetAttribute (sclGetParameter (sclGetCircuit &#34;&#34;) &#34;{param}&#34;) &#34;value&#34; {value})&#39;
     return run_command(session, cmd)
 
-def set_parameters(session: Session, params: dict[str, float]) -&gt; bool:
+
+def set_parameters(session: Session, params: Dict[str, float]) -&gt; bool:
+    &#34;&#34;&#34;Set the values for a list of netlist parameters in the Spectre session.
+
+    Parameters
+    ----------
+    session : Session
+        An instance of the `Session` class representing the active Spectre session.
+        The session contains necessary information, including the raw output file
+        and the current offset for reading results.
+    params : Dict[str, float]
+        A dictionary where the keys are the names of the netlist parameters and the
+        values are the new values to be assigned to those parameters.
+
+    Returns
+    -------
+    bool
+        `True` if all parameters were successfully updated, `False` if any of the
+        parameter updates failed.
     &#34;&#34;&#34;
-    Set a list of parameters
-    &#34;&#34;&#34;
-    return all(set_parameter(session, p, v) for p,v in params.items())
+    return all(set_parameter(session, p, v) for p, v in params.items())
+
 
 def get_parameter(session: Session, param: str) -&gt; float:
-    &#34;&#34;&#34;
-    Get a parameter in the netlist.
+    &#34;&#34;&#34;Retrieve the value of a specified netlist parameter in the Spectre session.
+
+    Parameters
+    ----------
+    session : Session
+        An instance of the `Session` class representing the active Spectre session.
+        The session contains necessary information, including the raw output file
+        and the current offset for reading results.
+    param : str
+        The name of the netlist parameter whose value is to be retrieved.
+
+    Returns
+    -------
+    float
+        The current value of the specified netlist parameter.
     &#34;&#34;&#34;
     cmd = f&#39;(sclGetAttribute (sclGetParameter (sclGetCircuit &#34;&#34;) &#34;{param}&#34;) &#34;value&#34;)&#39;
     run_command(session, cmd)
     return float(session.repl.before.decode(&#39;utf-8&#39;).split(&#39;\n&#39;)[-1])
 
-def get_parameters(session: Session, params: Iterable[str]) -&gt; dict[str, float]:
-    &#34;&#34;&#34;
-    Get a set of parameters in the netlist.
+
+def get_parameters(session: Session, params: Iterable[str]) -&gt; Dict[str, float]:
+    &#34;&#34;&#34;Retrieve the values of a set of netlist parameters in the Spectre session.
+
+    Parameters
+    ----------
+    session : Session
+        An instance of the `Session` class representing the active Spectre session.
+        The session contains necessary information, including the raw output file
+        and the current offset for reading results.
+    params : Iterable[str]
+        An iterable of strings, where each string is the name of a netlist parameter
+        whose value is to be retrieved.
+
+    Returns
+    -------
+    Dict[str, float]
+        A dictionary where the keys are the names of the specified parameters and
+        the values are the corresponding parameter values retrieved from the netlist.
     &#34;&#34;&#34;
     return {param: get_parameter(session, param) for param in params}
 
+
 def stop_session(session, remove_raw: bool = False) -&gt; bool:
-    &#34;&#34;&#34;
-    Quit spectre interactive session and close terminal
+    &#34;&#34;&#34;Quit the Spectre interactive session and close the terminal.
+
+    This function attempts to gracefully quit the Spectre interactive session by sending
+    the `(sclQuit)` command. If Spectre refuses to exit gracefully, it forces termination
+    of the session. Optionally, it can also remove the raw output file associated with
+    the session.
+
+    Parameters
+    ----------
+    session : Session
+        An instance of the `Session` class representing the active Spectre session.
+        The session contains necessary information, including the raw output file
+        and the current offset for reading results.
+    remove_raw : bool, optional
+        If `True`, the raw output file associated with the session will be deleted
+        after the session is stopped. Defaults to `False`.
+
+    Returns
+    -------
+    bool
+        `True` if the session was successfully terminated (whether gracefully or by force),
+        `False` otherwise.
+
+    Warns
+    -----
+    RuntimeWarning
+        If the session refuses to exit gracefully and is forcibly terminated.
     &#34;&#34;&#34;
     if session.repl.isalive():
         session.repl.sendline(&#39;(sclQuit)&#39;)
         session.repl.wait()
         if session.repl.isalive():
-            warnings.warn( &#39;spectre refused to exit gracefully, forcing ...&#39;
-                         , RuntimeWarning )
-            session.repl.terminate(force = True)
-    if remove_raw:
+            warnings.warn(
+                &#39;spectre refused to exit gracefully, forcing ...&#39;, RuntimeWarning)
+            session.repl.terminate(force=True)
+    if remove_raw and os.path.isfile(session.raw_file):
         os.remove(session.raw_file)
-    return not session.repl.isalive()</code></pre>
+    return not session.repl.isalive()
+
+
+def list_analyses(session: Session) -&gt; list[str]:
+    &#34;&#34;&#34;Retrieve all simulation analyses from the current interactive Spectre session.
+
+    This function sends a command to the Spectre session to list all available
+    simulation analyses. It then parses the command output and returns a list
+    of analysis names.
+
+    Parameters
+    ----------
+    session : Session
+        An instance of the `Session` class representing the active Spectre session.
+        The session contains necessary information, including the raw output file
+        and the current offset for reading results.
+
+    Returns
+    -------
+    list[str]
+        A list of strings where each string is the name of a simulation analysis
+        available in the current Spectre session.
+    &#34;&#34;&#34;
+    cmd = &#39;(sclListAnalysis)&#39;
+    run_command(session, cmd)
+    raw_list = session.repl.before.decode(&#39;utf-8&#39;).split(&#39;\n&#39;)[1:]
+    return re.findall(r&#39;\(&#34;([^&#34;]+)&#34;\s+&#34;([^&#34;]+)&#34;\)&#39;, &#39; &#39;.join(raw_list))
+
+
+def list_analysis_types(session: Session) -&gt; list[tuple[str, str]]:
+    &#34;&#34;&#34;Retrieve all available analysis types in the current Spectre session.
+
+    This function sends a command to the Spectre session to retrieve detailed
+    information about a specific analysis type (in this case, &#34;ac&#34;). It then parses
+    the command output to extract and return a list of analysis types and their
+    descriptions.
+
+    Parameters
+    ----------
+    session : Session
+        An instance of the `Session` class representing the active Spectre session.
+        The session contains necessary information, including the raw output file
+        and the current offset for reading results.
+
+    Returns
+    -------
+    list[tuple[str, str]]
+        A list of tuples, where each tuple contains:
+        - The name of the analysis type as the first element (str).
+        - A description about the analysis type as the second element (str).
+    &#34;&#34;&#34;
+    cmd = &#39;(sclHelp (sclGetAnalysis &#34;ac&#34;)&#39;
+    run_command(session, cmd)
+    raw_list = session.repl.before.decode(&#39;utf-8&#39;).split(&#39;\n&#39;)[1:]
+    return re.findall(r&#39;\(&#34;([^&#34;]+)&#34;\s+&#34;([^&#34;]+)&#34;\)&#39;, &#39; &#39;.join(raw_list))
+
+
+def list_instances(session: Session) -&gt; list[str]:
+    &#34;&#34;&#34;Retrieve a list of all components inthe circuit.
+
+    This function sends a command to the Spectre session to list all available
+    instances. It then parses the command output and returns a list of instance
+    names.
+
+    Parameters
+    ----------
+    session : Session
+        An instance of the `Session` class representing the active Spectre session.
+        The session contains necessary information, including the raw output file
+        and the current offset for reading results.
+
+    Returns
+    -------
+    list[str]
+        A list of strings where each string is the name of an component or instance available
+        in the current Spectre session.
+    &#34;&#34;&#34;
+    cmd = &#39;(sclListInstance)&#39;
+    run_command(session, cmd)
+    raw_list = session.repl.before.decode(&#39;utf-8&#39;).split(&#39;\n&#39;)[1:]
+    return re.findall(r&#39;\(&#34;([^&#34;]+)&#34;\s+&#34;([^&#34;]+)&#34;\)&#39;, &#39; &#39;.join(raw_list))
+
+
+def list_nets(session: Session) -&gt; list[str]:
+    &#34;&#34;&#34;Retrieve a list of all nets in the circuit.
+
+    This function sends a command to the Spectre session to list all available
+    nets. It then parses the command output and returns a list of net names.
+
+    Parameters
+    ----------
+    session : Session
+        An instance of the `Session` class representing the active Spectre session.
+        The session contains necessary information, including the raw output file
+        and the current offset for reading results.
+
+    Returns
+    -------
+    list[str]
+        A list of strings where each string is the name of a net available
+        in the current Spectre session.
+    &#34;&#34;&#34;
+    cmd = &#39;(sclListNet)&#39;
+    run_command(session, cmd)
+    raw_list = session.repl.before.decode(&#39;utf-8&#39;).split(&#39;\n&#39;)
+    return re.findall(r&#39;&#34;(.*?)&#34;&#39;, &#39; &#39;.join(raw_list))
+
+
+def list_circuit_parameters(session: Session) -&gt; list[str]:
+    &#34;&#34;&#34;Retrieve a list of all circuit parameters in the current Spectre session.
+
+    This function sends a command to the Spectre session to list all available
+    circuit parameters. It then parses the command output and returns a list
+    of parameter names.
+
+    Parameters
+    ----------
+    session : Session
+        An instance of the `Session` class representing the active Spectre session.
+        The session contains necessary information, including the raw output file
+        and the current offset for reading results.
+
+    Returns
+    -------
+    list[str]
+        A list of strings where each string is the name of a circuit parameter
+        available in the current Spectre session.
+    &#34;&#34;&#34;
+    cmd = &#39;(sclListParameter (sclGetCircuit &#34;&#34;))&#39;
+    run_command(session, cmd)
+    raw_list = session.repl.before.decode(&#39;utf-8&#39;).split(&#39;\n&#39;)[1:]
+    return re.findall(r&#39;\(&#34;([^&#34;]+)&#34;\s+&#34;.*?&#34;\)&#39;, &#39; &#39;.join(raw_list))
+
+
+def list_analysis_parameters(session: Session, analysis_name: str) -&gt; list[str]:
+    &#34;&#34;&#34;Retrieve a list of parameters for a specified analysis in the current Spectre session.
+
+    This function sends a command to the Spectre session to list all parameters
+    associated with a specified analysis. It then parses the command output
+    and returns a list of parameter names.
+
+    Parameters
+    ----------
+    session : Session
+        An instance of the `Session` class representing the active Spectre session.
+        The session contains necessary information, including the raw output file
+        and the current offset for reading results.
+    analysis_name : str
+        The name of the analysis for which to list the parameters. This should be
+        a valid analysis name within the current Spectre session.
+
+    Returns
+    -------
+    list[str]
+        A list of strings where each string is the name of a parameter associated
+        with the specified analysis in the current Spectre session.
+    &#34;&#34;&#34;
+    cmd = f&#39;(sclListParameter (sclGetAnalysis &#34;{analysis_name}&#34;))&#39;
+    run_command(session, cmd)
+    raw_list = session.repl.before.decode(&#39;utf-8&#39;).split(&#39;\n&#39;)[2:]
+    return re.findall(r&#39;\(&#34;([^&#34;]+)&#34;\s+&#34;.*?&#34;\)&#39;, &#39; &#39;.join(raw_list))
+
+
+def get_analysis_parameter(session, analysis_name, parameter_name) -&gt; list[tuple[str, str]]:
+    &#34;&#34;&#34;Retrieve the attributes and their values for a specified parameter in a given analysis.
+
+    This function sends a command to the Spectre session to list all attributes
+    associated with a specific parameter of a specified analysis. It then parses
+    the command output and returns a list of tuples, where each tuple contains
+    an attribute name and its corresponding value.
+
+    Parameters
+    ----------
+    session : Session
+        An instance of the `Session` class representing the active Spectre session.
+        The session contains necessary information, including the raw output file
+        and the current offset for reading results.
+    analysis_name : str
+        The name of the analysis for which the parameter attributes are to be retrieved.
+        This should be a valid analysis name within the current Spectre session.
+    parameter_name : str
+        The name of the parameter whose attributes and values are to be retrieved.
+        This should be a valid parameter name within the specified analysis.
+
+    Returns
+    -------
+    list[tuple[str, str]]
+        A list of tuples where each tuple contains:
+        - The name of the attribute (str).
+        - The value of the attribute (str).
+    &#34;&#34;&#34;
+    cmd = (
+        f&#39;(sclListAttribute (sclGetParameter (sclGetAnalysis &#34;{analysis_name}&#34;) &#39;
+        f&#39;&#34;{parameter_name}&#34;))&#39;
+    )
+    run_command(session, cmd)
+    raw_list = session.repl.before.decode(&#39;utf-8&#39;).split(&#39;\n&#39;)[1:]
+    return re.findall(r&#39;\(&#34;([^&#34;]+)&#34;\s+&#34;?([^&#34;\)]*)&#34;?\)&#39;, &#39; &#39;.join(raw_list))
+
+
+def set_analysis_parameter(session: Session, analysis_name: str, parameter_name: str,
+                           attribute_name: str, value: str) -&gt; bool:
+    &#34;&#34;&#34;Set the value of a specific attribute for a parameter in a given analysis.
+
+    This function sends a command to the Spectre session to set the value of a
+    specified attribute for a parameter within a particular analysis. The command
+    is constructed based on the provided analysis name, parameter name, attribute
+    name, and the new value.
+
+    Parameters
+    ----------
+    session : Session
+        An instance of the `Session` class representing the active Spectre session.
+        The session contains necessary information, including the raw output file
+        and the current offset for reading results.
+    analysis_name : str
+        The name of the analysis that contains the parameter to be modified. This
+        should be a valid analysis name within the current Spectre session.
+    parameter_name : str
+        The name of the parameter whose attribute is to be set. This should be a
+        valid parameter name within the specified analysis.
+    attribute_name : str
+        The name of the attribute to be modified. This should be a valid attribute
+        name for the specified parameter.
+    value : str
+        The new value to set for the specified attribute.
+
+    Returns
+    -------
+    bool
+        `True` if the command to set the attribute was successfully executed,
+        `False` otherwise.
+    &#34;&#34;&#34;
+    cmd = (
+        f&#39;(sclSetAttribute (sclGetParameter (sclGetAnalysis &#34;{analysis_name}&#34;) &#34;{parameter_name}&#34;) &#39;
+        f&#39;&#34;{attribute_name}&#34; &#34;{value}&#34;)&#39;
+    )
+    return run_command(session, cmd)
+
+
+def create_analysis(session: Session, analysis_type: str, analysis_name: str) -&gt; bool:
+    &#34;&#34;&#34;Create a new analysis in the Spectre session.
+
+    To see the available analysis types check the file reference.yaml.
+
+    Parameters
+    ----------
+    session : Session
+        An instance of the `Session` class representing the active Spectre session.
+        The session contains necessary information, including the raw output file
+        and the current offset for reading results.
+    analysis_type : str
+        The type of analysis to be created. This should be a valid analysis type
+        recognized by the Spectre session.
+    analysis_name : str
+        The name to assign to the new analysis. This name must be unique within
+        the session.
+
+    Returns
+    -------
+    bool
+        `True` if the analysis was successfully created, `False` if the command
+        failed to execute.
+    &#34;&#34;&#34;
+    cmd = f&#39;(sclCreateAnalysis &#34;{analysis_name}&#34; &#34;{analysis_type}&#34;)&#39;
+    return run_command(session, cmd)
+
+
+def get_circuit_parameter(session: Session, circuit_parameter: str) -&gt; list[tuple[str, str]]:
+    &#34;&#34;&#34;Retrieve the attributes and their values for a specified circuit parameter.
+
+    This function sends a command to the Spectre session to list all attributes
+    associated with a specified circuit parameter. It then parses the command output
+    and returns a list of tuples, where each tuple contains an attribute name
+    and its corresponding value.
+
+    Parameters
+    ----------
+    session : Session
+        An instance of the `Session` class representing the active Spectre session.
+        The session contains necessary information, including the raw output file
+        and the current offset for reading results.
+    circuit_parameter : str
+        The name of the circuit parameter whose attributes and values are to be retrieved.
+        This should be a valid circuit parameter name within the current Spectre session.
+
+    Returns
+    -------
+    list[tuple[str, str]]
+        A list of tuples where each tuple contains:
+        - The name of the attribute (str).
+        - The value of the attribute (str).
+    &#34;&#34;&#34;
+    cmd = f&#39;(sclListAttribute (sclGetParameter (sclGetCircuit &#34;&#34;) &#34;{circuit_parameter}&#34;))&#39;
+    run_command(session, cmd)
+    raw_list = session.repl.before.decode(&#39;utf-8&#39;).split(&#39;\n&#39;)[1:]
+    return re.findall(r&#39;\(&#34;([^&#34;]+)&#34;\s+&#34;?([^&#34;\)]*)&#34;?\)&#39;, &#39; &#39;.join(raw_list))
+
+
+def set_circuit_parameter(session: Session, circuit_parameter: str, attribute_name: str,
+                          value: str) -&gt; bool:
+    &#34;&#34;&#34;Set the value of a specific attribute for a circuit parameter in the current Spectre session.
+
+    This function sends a command to the Spectre session to set the value of a
+    specified attribute for a circuit parameter. The command is constructed based
+    on the provided circuit parameter name, attribute name, and the new value.
+
+    Parameters
+    ----------
+    session : Session
+        An instance of the `Session` class representing the active Spectre session.
+        The session contains necessary information, including the raw output file
+        and the current offset for reading results.
+    circuit_parameter : str
+        The name of the circuit parameter whose attribute is to be set. This should
+        be a valid circuit parameter name within the current Spectre session.
+    attribute_name : str
+        The name of the attribute to be modified. This should be a valid attribute
+        name for the specified circuit parameter.
+    value : str
+        The new value to set for the specified attribute.
+
+    Returns
+    -------
+    bool
+        `True` if the command to set the attribute was successfully executed,
+        `False` otherwise.
+    &#34;&#34;&#34;
+    cmd = (
+        f&#39;(sclSetAttribute (sclGetParameter (sclGetCircuit &#34;&#34;) &#34;{circuit_parameter}&#34;) &#39;
+        f&#39;&#34;{attribute_name}&#34; &#34;{value}&#34;)&#39;
+    )
+    return run_command(session, cmd)
+
+
+def list_instance_parameters(session: Session, instance_name: str) -&gt; list[tuple[str, str]]:
+    &#34;&#34;&#34;Retrieve the parameters and their values for a specified instance.
+
+    This function sends a command to the Spectre session to list all parameters
+    associated with a specific instance. It then parses the command output and
+    returns a list of tuples, where each tuple contains a parameter name and its
+    corresponding value.
+
+    Parameters
+    ----------
+    session : Session
+        An instance of the `Session` class representing the active Spectre session.
+        The session contains necessary information, including the raw output file
+        and the current offset for reading results.
+    instance_name : str
+        The name of the instance whose parameters are to be retrieved. This should
+        be a valid instance name within the current Spectre session.
+
+    Returns
+    -------
+    list[tuple[str, str]]
+        A list of tuples where each tuple contains:
+        - The name of the parameter (str).
+        - The value of the parameter (str).
+    &#34;&#34;&#34;
+    cmd = f&#39;(sclListParameter (sclGetInstance &#34;{instance_name}&#34;))&#39;
+    run_command(session, cmd)
+    raw_list = session.repl.before.decode(&#39;utf-8&#39;).split(&#39;\n&#39;)[1:]
+    return re.findall(r&#39;\(&#34;([^&#34;]+)&#34;\s+&#34;.*?&#34;\)&#39;, &#39; &#39;.join(raw_list))
+
+
+def get_instance_parameter(session: Session, instance_name: str,
+                           instance_parameter: str) -&gt; list[tuple[str, str]]:
+    &#34;&#34;&#34;Retrieve the attributes and their values for a specified parameter of an instance.
+
+    This function sends a command to the Spectre session to list all attributes
+    associated with a specific parameter of a given instance. It then parses the
+    command output and returns a list of tuples, where each tuple contains an
+    attribute name and its corresponding value.
+
+    Parameters
+    ----------
+    session : Session
+        An instance of the `Session` class representing the active Spectre session.
+        The session contains necessary information, including the raw output file
+        and the current offset for reading results.
+    instance_name : str
+        The name of the instance whose parameter attributes are to be retrieved.
+        This should be a valid instance name within the current Spectre session.
+    instance_parameter : str
+        The name of the parameter whose attributes and values are to be retrieved.
+        This should be a valid parameter name within the specified instance.
+
+    Returns
+    -------
+    list[tuple[str, str]]
+        A list of tuples where each tuple contains:
+        - The name of the attribute (str).
+        - The value of the attribute (str).
+    &#34;&#34;&#34;
+    cmd = (
+        f&#39;(sclListAttribute (sclGetParameter (sclGetInstance &#34;{instance_name}&#34;) &#39;
+        f&#39;&#34;{instance_parameter}&#34;))&#39;
+    )
+    run_command(session, cmd)
+    raw_list = session.repl.before.decode(&#39;utf-8&#39;).split(&#39;\n&#39;)[1:]
+    return re.findall(r&#39;\(&#34;([^&#34;]+)&#34;\s+&#34;?([^&#34;\)]*)&#34;?\)&#39;, &#39; &#39;.join(raw_list))
+
+
+def set_instance_parameter(session: Session, instance_name: str, instance_parameter: str,
+                           attribute_name: str, value: str) -&gt; bool:
+    &#34;&#34;&#34;Set the value of a specific attribute for a parameter of an instance.
+
+    This function sends a command to the Spectre session to set the value of a
+    specified attribute for a parameter within a particular instance. The command
+    is constructed based on the provided instance name, parameter name, attribute
+    name, and the new value.
+
+    Parameters
+    ----------
+    session : Session
+        An instance of the `Session` class representing the active Spectre session.
+        The session contains necessary information, including the raw output file
+        and the current offset for reading results.
+    instance_name : str
+        The name of the instance that contains the parameter to be modified. This
+        should be a valid instance name within the current Spectre session.
+    instance_parameter : str
+        The name of the parameter whose attribute is to be set. This should be a
+        valid parameter name within the specified instance.
+    attribute_name : str
+        The name of the attribute to be modified. This should be a valid attribute
+        name for the specified parameter.
+    value : str
+        The new value to set for the specified attribute.
+
+    Returns
+    -------
+    bool
+        `True` if the command to set the attribute was successfully executed,
+        `False` otherwise.
+    &#34;&#34;&#34;
+    cmd = (
+        f&#39;(sclSetAttribute (sclGetParameter (sclGetInstance &#34;{instance_name}&#34;) &#39;
+        f&#39;&#34;{instance_parameter}&#34;) &#34;{attribute_name}&#34; &#34;{value}&#34;)&#39;
+    )
+    return run_command(session, cmd)</code></pre>
 </details>
 </section>
 <section>
@@ -238,37 +978,304 @@ def stop_session(session, remove_raw: bool = False) -&gt; bool:
 <section>
 <h2 class="section-title" id="header-functions">Functions</h2>
 <dl>
-<dt id="pyspectre.core.get_analyses"><code class="name flex">
-<span>def <span class="ident">get_analyses</span></span>(<span>session: <a title="pyspectre.core.Session" href="#pyspectre.core.Session">Session</a>) ‑> dict[str, str]</span>
+<dt id="pyspectre.core.create_analysis"><code class="name flex">
+<span>def <span class="ident">create_analysis</span></span>(<span>session: <a title="pyspectre.core.Session" href="#pyspectre.core.Session">Session</a>, analysis_type: str, analysis_name: str) ‑> bool</span>
 </code></dt>
 <dd>
-<div class="desc"><p>Retrieve all simulation analyses from current netlist</p></div>
+<div class="desc"><p>Create a new analysis in the Spectre session.</p>
+<p>To see the available analysis types check the file reference.yaml.</p>
+<h2 id="parameters">Parameters</h2>
+<dl>
+<dt><strong><code>session</code></strong> :&ensp;<code><a title="pyspectre.core.Session" href="#pyspectre.core.Session">Session</a></code></dt>
+<dd>An instance of the <code><a title="pyspectre.core.Session" href="#pyspectre.core.Session">Session</a></code> class representing the active Spectre session.
+The session contains necessary information, including the raw output file
+and the current offset for reading results.</dd>
+<dt><strong><code>analysis_type</code></strong> :&ensp;<code>str</code></dt>
+<dd>The type of analysis to be created. This should be a valid analysis type
+recognized by the Spectre session.</dd>
+<dt><strong><code>analysis_name</code></strong> :&ensp;<code>str</code></dt>
+<dd>The name to assign to the new analysis. This name must be unique within
+the session.</dd>
+</dl>
+<h2 id="returns">Returns</h2>
+<dl>
+<dt><code>bool</code></dt>
+<dd><code>True</code> if the analysis was successfully created, <code>False</code> if the command
+failed to execute.</dd>
+</dl></div>
 <details class="source">
 <summary>
 <span>Expand source code</span>
 </summary>
-<pre><code class="python">def get_analyses(session: Session) -&gt; dict[str, str]:
+<pre><code class="python">def create_analysis(session: Session, analysis_type: str, analysis_name: str) -&gt; bool:
+    &#34;&#34;&#34;Create a new analysis in the Spectre session.
+
+    To see the available analysis types check the file reference.yaml.
+
+    Parameters
+    ----------
+    session : Session
+        An instance of the `Session` class representing the active Spectre session.
+        The session contains necessary information, including the raw output file
+        and the current offset for reading results.
+    analysis_type : str
+        The type of analysis to be created. This should be a valid analysis type
+        recognized by the Spectre session.
+    analysis_name : str
+        The name to assign to the new analysis. This name must be unique within
+        the session.
+
+    Returns
+    -------
+    bool
+        `True` if the analysis was successfully created, `False` if the command
+        failed to execute.
     &#34;&#34;&#34;
-    Retrieve all simulation analyses from current netlist
+    cmd = f&#39;(sclCreateAnalysis &#34;{analysis_name}&#34; &#34;{analysis_type}&#34;)&#39;
+    return run_command(session, cmd)</code></pre>
+</details>
+</dd>
+<dt id="pyspectre.core.get_analysis_parameter"><code class="name flex">
+<span>def <span class="ident">get_analysis_parameter</span></span>(<span>session, analysis_name, parameter_name) ‑> list[tuple[str, str]]</span>
+</code></dt>
+<dd>
+<div class="desc"><p>Retrieve the attributes and their values for a specified parameter in a given analysis.</p>
+<p>This function sends a command to the Spectre session to list all attributes
+associated with a specific parameter of a specified analysis. It then parses
+the command output and returns a list of tuples, where each tuple contains
+an attribute name and its corresponding value.</p>
+<h2 id="parameters">Parameters</h2>
+<dl>
+<dt><strong><code>session</code></strong> :&ensp;<code><a title="pyspectre.core.Session" href="#pyspectre.core.Session">Session</a></code></dt>
+<dd>An instance of the <code><a title="pyspectre.core.Session" href="#pyspectre.core.Session">Session</a></code> class representing the active Spectre session.
+The session contains necessary information, including the raw output file
+and the current offset for reading results.</dd>
+<dt><strong><code>analysis_name</code></strong> :&ensp;<code>str</code></dt>
+<dd>The name of the analysis for which the parameter attributes are to be retrieved.
+This should be a valid analysis name within the current Spectre session.</dd>
+<dt><strong><code>parameter_name</code></strong> :&ensp;<code>str</code></dt>
+<dd>The name of the parameter whose attributes and values are to be retrieved.
+This should be a valid parameter name within the specified analysis.</dd>
+</dl>
+<h2 id="returns">Returns</h2>
+<dl>
+<dt><code>list[tuple[str, str]]</code></dt>
+<dd>A list of tuples where each tuple contains:
+- The name of the attribute (str).
+- The value of the attribute (str).</dd>
+</dl></div>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def get_analysis_parameter(session, analysis_name, parameter_name) -&gt; list[tuple[str, str]]:
+    &#34;&#34;&#34;Retrieve the attributes and their values for a specified parameter in a given analysis.
+
+    This function sends a command to the Spectre session to list all attributes
+    associated with a specific parameter of a specified analysis. It then parses
+    the command output and returns a list of tuples, where each tuple contains
+    an attribute name and its corresponding value.
+
+    Parameters
+    ----------
+    session : Session
+        An instance of the `Session` class representing the active Spectre session.
+        The session contains necessary information, including the raw output file
+        and the current offset for reading results.
+    analysis_name : str
+        The name of the analysis for which the parameter attributes are to be retrieved.
+        This should be a valid analysis name within the current Spectre session.
+    parameter_name : str
+        The name of the parameter whose attributes and values are to be retrieved.
+        This should be a valid parameter name within the specified analysis.
+
+    Returns
+    -------
+    list[tuple[str, str]]
+        A list of tuples where each tuple contains:
+        - The name of the attribute (str).
+        - The value of the attribute (str).
     &#34;&#34;&#34;
-    cmd = &#39;(sclListAnalysis)&#39;
+    cmd = (
+        f&#39;(sclListAttribute (sclGetParameter (sclGetAnalysis &#34;{analysis_name}&#34;) &#39;
+        f&#39;&#34;{parameter_name}&#34;))&#39;
+    )
     run_command(session, cmd)
-    out = session.repl.before.decode(&#39;utf-8&#39;).split(&#39;\n&#39;)[1:-1]
-    return dict([re.search(r&#39;&#34;(.+)&#34;\s*&#34;(.+)&#34;&#39;, o).groups() for o in out])</code></pre>
+    raw_list = session.repl.before.decode(&#39;utf-8&#39;).split(&#39;\n&#39;)[1:]
+    return re.findall(r&#39;\(&#34;([^&#34;]+)&#34;\s+&#34;?([^&#34;\)]*)&#34;?\)&#39;, &#39; &#39;.join(raw_list))</code></pre>
+</details>
+</dd>
+<dt id="pyspectre.core.get_circuit_parameter"><code class="name flex">
+<span>def <span class="ident">get_circuit_parameter</span></span>(<span>session: <a title="pyspectre.core.Session" href="#pyspectre.core.Session">Session</a>, circuit_parameter: str) ‑> list[tuple[str, str]]</span>
+</code></dt>
+<dd>
+<div class="desc"><p>Retrieve the attributes and their values for a specified circuit parameter.</p>
+<p>This function sends a command to the Spectre session to list all attributes
+associated with a specified circuit parameter. It then parses the command output
+and returns a list of tuples, where each tuple contains an attribute name
+and its corresponding value.</p>
+<h2 id="parameters">Parameters</h2>
+<dl>
+<dt><strong><code>session</code></strong> :&ensp;<code><a title="pyspectre.core.Session" href="#pyspectre.core.Session">Session</a></code></dt>
+<dd>An instance of the <code><a title="pyspectre.core.Session" href="#pyspectre.core.Session">Session</a></code> class representing the active Spectre session.
+The session contains necessary information, including the raw output file
+and the current offset for reading results.</dd>
+<dt><strong><code>circuit_parameter</code></strong> :&ensp;<code>str</code></dt>
+<dd>The name of the circuit parameter whose attributes and values are to be retrieved.
+This should be a valid circuit parameter name within the current Spectre session.</dd>
+</dl>
+<h2 id="returns">Returns</h2>
+<dl>
+<dt><code>list[tuple[str, str]]</code></dt>
+<dd>A list of tuples where each tuple contains:
+- The name of the attribute (str).
+- The value of the attribute (str).</dd>
+</dl></div>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def get_circuit_parameter(session: Session, circuit_parameter: str) -&gt; list[tuple[str, str]]:
+    &#34;&#34;&#34;Retrieve the attributes and their values for a specified circuit parameter.
+
+    This function sends a command to the Spectre session to list all attributes
+    associated with a specified circuit parameter. It then parses the command output
+    and returns a list of tuples, where each tuple contains an attribute name
+    and its corresponding value.
+
+    Parameters
+    ----------
+    session : Session
+        An instance of the `Session` class representing the active Spectre session.
+        The session contains necessary information, including the raw output file
+        and the current offset for reading results.
+    circuit_parameter : str
+        The name of the circuit parameter whose attributes and values are to be retrieved.
+        This should be a valid circuit parameter name within the current Spectre session.
+
+    Returns
+    -------
+    list[tuple[str, str]]
+        A list of tuples where each tuple contains:
+        - The name of the attribute (str).
+        - The value of the attribute (str).
+    &#34;&#34;&#34;
+    cmd = f&#39;(sclListAttribute (sclGetParameter (sclGetCircuit &#34;&#34;) &#34;{circuit_parameter}&#34;))&#39;
+    run_command(session, cmd)
+    raw_list = session.repl.before.decode(&#39;utf-8&#39;).split(&#39;\n&#39;)[1:]
+    return re.findall(r&#39;\(&#34;([^&#34;]+)&#34;\s+&#34;?([^&#34;\)]*)&#34;?\)&#39;, &#39; &#39;.join(raw_list))</code></pre>
+</details>
+</dd>
+<dt id="pyspectre.core.get_instance_parameter"><code class="name flex">
+<span>def <span class="ident">get_instance_parameter</span></span>(<span>session: <a title="pyspectre.core.Session" href="#pyspectre.core.Session">Session</a>, instance_name: str, instance_parameter: str) ‑> list[tuple[str, str]]</span>
+</code></dt>
+<dd>
+<div class="desc"><p>Retrieve the attributes and their values for a specified parameter of an instance.</p>
+<p>This function sends a command to the Spectre session to list all attributes
+associated with a specific parameter of a given instance. It then parses the
+command output and returns a list of tuples, where each tuple contains an
+attribute name and its corresponding value.</p>
+<h2 id="parameters">Parameters</h2>
+<dl>
+<dt><strong><code>session</code></strong> :&ensp;<code><a title="pyspectre.core.Session" href="#pyspectre.core.Session">Session</a></code></dt>
+<dd>An instance of the <code><a title="pyspectre.core.Session" href="#pyspectre.core.Session">Session</a></code> class representing the active Spectre session.
+The session contains necessary information, including the raw output file
+and the current offset for reading results.</dd>
+<dt><strong><code>instance_name</code></strong> :&ensp;<code>str</code></dt>
+<dd>The name of the instance whose parameter attributes are to be retrieved.
+This should be a valid instance name within the current Spectre session.</dd>
+<dt><strong><code>instance_parameter</code></strong> :&ensp;<code>str</code></dt>
+<dd>The name of the parameter whose attributes and values are to be retrieved.
+This should be a valid parameter name within the specified instance.</dd>
+</dl>
+<h2 id="returns">Returns</h2>
+<dl>
+<dt><code>list[tuple[str, str]]</code></dt>
+<dd>A list of tuples where each tuple contains:
+- The name of the attribute (str).
+- The value of the attribute (str).</dd>
+</dl></div>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def get_instance_parameter(session: Session, instance_name: str,
+                           instance_parameter: str) -&gt; list[tuple[str, str]]:
+    &#34;&#34;&#34;Retrieve the attributes and their values for a specified parameter of an instance.
+
+    This function sends a command to the Spectre session to list all attributes
+    associated with a specific parameter of a given instance. It then parses the
+    command output and returns a list of tuples, where each tuple contains an
+    attribute name and its corresponding value.
+
+    Parameters
+    ----------
+    session : Session
+        An instance of the `Session` class representing the active Spectre session.
+        The session contains necessary information, including the raw output file
+        and the current offset for reading results.
+    instance_name : str
+        The name of the instance whose parameter attributes are to be retrieved.
+        This should be a valid instance name within the current Spectre session.
+    instance_parameter : str
+        The name of the parameter whose attributes and values are to be retrieved.
+        This should be a valid parameter name within the specified instance.
+
+    Returns
+    -------
+    list[tuple[str, str]]
+        A list of tuples where each tuple contains:
+        - The name of the attribute (str).
+        - The value of the attribute (str).
+    &#34;&#34;&#34;
+    cmd = (
+        f&#39;(sclListAttribute (sclGetParameter (sclGetInstance &#34;{instance_name}&#34;) &#39;
+        f&#39;&#34;{instance_parameter}&#34;))&#39;
+    )
+    run_command(session, cmd)
+    raw_list = session.repl.before.decode(&#39;utf-8&#39;).split(&#39;\n&#39;)[1:]
+    return re.findall(r&#39;\(&#34;([^&#34;]+)&#34;\s+&#34;?([^&#34;\)]*)&#34;?\)&#39;, &#39; &#39;.join(raw_list))</code></pre>
 </details>
 </dd>
 <dt id="pyspectre.core.get_parameter"><code class="name flex">
 <span>def <span class="ident">get_parameter</span></span>(<span>session: <a title="pyspectre.core.Session" href="#pyspectre.core.Session">Session</a>, param: str) ‑> float</span>
 </code></dt>
 <dd>
-<div class="desc"><p>Get a parameter in the netlist.</p></div>
+<div class="desc"><p>Retrieve the value of a specified netlist parameter in the Spectre session.</p>
+<h2 id="parameters">Parameters</h2>
+<dl>
+<dt><strong><code>session</code></strong> :&ensp;<code><a title="pyspectre.core.Session" href="#pyspectre.core.Session">Session</a></code></dt>
+<dd>An instance of the <code><a title="pyspectre.core.Session" href="#pyspectre.core.Session">Session</a></code> class representing the active Spectre session.
+The session contains necessary information, including the raw output file
+and the current offset for reading results.</dd>
+<dt><strong><code>param</code></strong> :&ensp;<code>str</code></dt>
+<dd>The name of the netlist parameter whose value is to be retrieved.</dd>
+</dl>
+<h2 id="returns">Returns</h2>
+<dl>
+<dt><code>float</code></dt>
+<dd>The current value of the specified netlist parameter.</dd>
+</dl></div>
 <details class="source">
 <summary>
 <span>Expand source code</span>
 </summary>
 <pre><code class="python">def get_parameter(session: Session, param: str) -&gt; float:
-    &#34;&#34;&#34;
-    Get a parameter in the netlist.
+    &#34;&#34;&#34;Retrieve the value of a specified netlist parameter in the Spectre session.
+
+    Parameters
+    ----------
+    session : Session
+        An instance of the `Session` class representing the active Spectre session.
+        The session contains necessary information, including the raw output file
+        and the current offset for reading results.
+    param : str
+        The name of the netlist parameter whose value is to be retrieved.
+
+    Returns
+    -------
+    float
+        The current value of the specified netlist parameter.
     &#34;&#34;&#34;
     cmd = f&#39;(sclGetAttribute (sclGetParameter (sclGetCircuit &#34;&#34;) &#34;{param}&#34;) &#34;value&#34;)&#39;
     run_command(session, cmd)
@@ -276,19 +1283,496 @@ def stop_session(session, remove_raw: bool = False) -&gt; bool:
 </details>
 </dd>
 <dt id="pyspectre.core.get_parameters"><code class="name flex">
-<span>def <span class="ident">get_parameters</span></span>(<span>session: <a title="pyspectre.core.Session" href="#pyspectre.core.Session">Session</a>, params: collections.abc.Iterable[str]) ‑> dict[str, float]</span>
+<span>def <span class="ident">get_parameters</span></span>(<span>session: <a title="pyspectre.core.Session" href="#pyspectre.core.Session">Session</a>, params: Iterable[str]) ‑> Dict[str, float]</span>
 </code></dt>
 <dd>
-<div class="desc"><p>Get a set of parameters in the netlist.</p></div>
+<div class="desc"><p>Retrieve the values of a set of netlist parameters in the Spectre session.</p>
+<h2 id="parameters">Parameters</h2>
+<dl>
+<dt><strong><code>session</code></strong> :&ensp;<code><a title="pyspectre.core.Session" href="#pyspectre.core.Session">Session</a></code></dt>
+<dd>An instance of the <code><a title="pyspectre.core.Session" href="#pyspectre.core.Session">Session</a></code> class representing the active Spectre session.
+The session contains necessary information, including the raw output file
+and the current offset for reading results.</dd>
+<dt><strong><code>params</code></strong> :&ensp;<code>Iterable[str]</code></dt>
+<dd>An iterable of strings, where each string is the name of a netlist parameter
+whose value is to be retrieved.</dd>
+</dl>
+<h2 id="returns">Returns</h2>
+<dl>
+<dt><code>Dict[str, float]</code></dt>
+<dd>A dictionary where the keys are the names of the specified parameters and
+the values are the corresponding parameter values retrieved from the netlist.</dd>
+</dl></div>
 <details class="source">
 <summary>
 <span>Expand source code</span>
 </summary>
-<pre><code class="python">def get_parameters(session: Session, params: Iterable[str]) -&gt; dict[str, float]:
-    &#34;&#34;&#34;
-    Get a set of parameters in the netlist.
+<pre><code class="python">def get_parameters(session: Session, params: Iterable[str]) -&gt; Dict[str, float]:
+    &#34;&#34;&#34;Retrieve the values of a set of netlist parameters in the Spectre session.
+
+    Parameters
+    ----------
+    session : Session
+        An instance of the `Session` class representing the active Spectre session.
+        The session contains necessary information, including the raw output file
+        and the current offset for reading results.
+    params : Iterable[str]
+        An iterable of strings, where each string is the name of a netlist parameter
+        whose value is to be retrieved.
+
+    Returns
+    -------
+    Dict[str, float]
+        A dictionary where the keys are the names of the specified parameters and
+        the values are the corresponding parameter values retrieved from the netlist.
     &#34;&#34;&#34;
     return {param: get_parameter(session, param) for param in params}</code></pre>
+</details>
+</dd>
+<dt id="pyspectre.core.get_yaml"><code class="name flex">
+<span>def <span class="ident">get_yaml</span></span>(<span>file_name: str) ‑> dict</span>
+</code></dt>
+<dd>
+<div class="desc"><p>Load and return a YAML file.</p>
+<h2 id="parameters">Parameters</h2>
+<dl>
+<dt><strong><code>file_name</code></strong> :&ensp;<code>str</code></dt>
+<dd>The name of the YAML file</dd>
+</dl>
+<h2 id="returns">Returns</h2>
+<dl>
+<dt><code>dict</code></dt>
+<dd>A dictionary containing the configuration data loaded from the YAML file.</dd>
+</dl>
+<h2 id="raises">Raises</h2>
+<dl>
+<dt><code>FileNotFoundError</code></dt>
+<dd>If the specified configuration file does not exist.</dd>
+</dl></div>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def get_yaml(file_name: str) -&gt; dict:
+    &#34;&#34;&#34;Load and return a YAML file.
+
+    Parameters
+    ----------
+    file_name : str
+        The name of the YAML file
+
+    Returns
+    -------
+    dict
+        A dictionary containing the configuration data loaded from the YAML file.
+
+    Raises
+    ------
+    FileNotFoundError
+        If the specified configuration file does not exist.
+    &#34;&#34;&#34;
+    config_path = Path(__file__).parent / file_name
+
+    if not config_path.exists():
+        raise FileNotFoundError(f&#34;Configuration file not found: {config_path}&#34;)
+
+    with config_path.open(&#39;r&#39;) as file:
+        return yaml.safe_load(file)</code></pre>
+</details>
+</dd>
+<dt id="pyspectre.core.list_analyses"><code class="name flex">
+<span>def <span class="ident">list_analyses</span></span>(<span>session: <a title="pyspectre.core.Session" href="#pyspectre.core.Session">Session</a>) ‑> list[str]</span>
+</code></dt>
+<dd>
+<div class="desc"><p>Retrieve all simulation analyses from the current interactive Spectre session.</p>
+<p>This function sends a command to the Spectre session to list all available
+simulation analyses. It then parses the command output and returns a list
+of analysis names.</p>
+<h2 id="parameters">Parameters</h2>
+<dl>
+<dt><strong><code>session</code></strong> :&ensp;<code><a title="pyspectre.core.Session" href="#pyspectre.core.Session">Session</a></code></dt>
+<dd>An instance of the <code><a title="pyspectre.core.Session" href="#pyspectre.core.Session">Session</a></code> class representing the active Spectre session.
+The session contains necessary information, including the raw output file
+and the current offset for reading results.</dd>
+</dl>
+<h2 id="returns">Returns</h2>
+<dl>
+<dt><code>list[str]</code></dt>
+<dd>A list of strings where each string is the name of a simulation analysis
+available in the current Spectre session.</dd>
+</dl></div>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def list_analyses(session: Session) -&gt; list[str]:
+    &#34;&#34;&#34;Retrieve all simulation analyses from the current interactive Spectre session.
+
+    This function sends a command to the Spectre session to list all available
+    simulation analyses. It then parses the command output and returns a list
+    of analysis names.
+
+    Parameters
+    ----------
+    session : Session
+        An instance of the `Session` class representing the active Spectre session.
+        The session contains necessary information, including the raw output file
+        and the current offset for reading results.
+
+    Returns
+    -------
+    list[str]
+        A list of strings where each string is the name of a simulation analysis
+        available in the current Spectre session.
+    &#34;&#34;&#34;
+    cmd = &#39;(sclListAnalysis)&#39;
+    run_command(session, cmd)
+    raw_list = session.repl.before.decode(&#39;utf-8&#39;).split(&#39;\n&#39;)[1:]
+    return re.findall(r&#39;\(&#34;([^&#34;]+)&#34;\s+&#34;([^&#34;]+)&#34;\)&#39;, &#39; &#39;.join(raw_list))</code></pre>
+</details>
+</dd>
+<dt id="pyspectre.core.list_analysis_parameters"><code class="name flex">
+<span>def <span class="ident">list_analysis_parameters</span></span>(<span>session: <a title="pyspectre.core.Session" href="#pyspectre.core.Session">Session</a>, analysis_name: str) ‑> list[str]</span>
+</code></dt>
+<dd>
+<div class="desc"><p>Retrieve a list of parameters for a specified analysis in the current Spectre session.</p>
+<p>This function sends a command to the Spectre session to list all parameters
+associated with a specified analysis. It then parses the command output
+and returns a list of parameter names.</p>
+<h2 id="parameters">Parameters</h2>
+<dl>
+<dt><strong><code>session</code></strong> :&ensp;<code><a title="pyspectre.core.Session" href="#pyspectre.core.Session">Session</a></code></dt>
+<dd>An instance of the <code><a title="pyspectre.core.Session" href="#pyspectre.core.Session">Session</a></code> class representing the active Spectre session.
+The session contains necessary information, including the raw output file
+and the current offset for reading results.</dd>
+<dt><strong><code>analysis_name</code></strong> :&ensp;<code>str</code></dt>
+<dd>The name of the analysis for which to list the parameters. This should be
+a valid analysis name within the current Spectre session.</dd>
+</dl>
+<h2 id="returns">Returns</h2>
+<dl>
+<dt><code>list[str]</code></dt>
+<dd>A list of strings where each string is the name of a parameter associated
+with the specified analysis in the current Spectre session.</dd>
+</dl></div>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def list_analysis_parameters(session: Session, analysis_name: str) -&gt; list[str]:
+    &#34;&#34;&#34;Retrieve a list of parameters for a specified analysis in the current Spectre session.
+
+    This function sends a command to the Spectre session to list all parameters
+    associated with a specified analysis. It then parses the command output
+    and returns a list of parameter names.
+
+    Parameters
+    ----------
+    session : Session
+        An instance of the `Session` class representing the active Spectre session.
+        The session contains necessary information, including the raw output file
+        and the current offset for reading results.
+    analysis_name : str
+        The name of the analysis for which to list the parameters. This should be
+        a valid analysis name within the current Spectre session.
+
+    Returns
+    -------
+    list[str]
+        A list of strings where each string is the name of a parameter associated
+        with the specified analysis in the current Spectre session.
+    &#34;&#34;&#34;
+    cmd = f&#39;(sclListParameter (sclGetAnalysis &#34;{analysis_name}&#34;))&#39;
+    run_command(session, cmd)
+    raw_list = session.repl.before.decode(&#39;utf-8&#39;).split(&#39;\n&#39;)[2:]
+    return re.findall(r&#39;\(&#34;([^&#34;]+)&#34;\s+&#34;.*?&#34;\)&#39;, &#39; &#39;.join(raw_list))</code></pre>
+</details>
+</dd>
+<dt id="pyspectre.core.list_analysis_types"><code class="name flex">
+<span>def <span class="ident">list_analysis_types</span></span>(<span>session: <a title="pyspectre.core.Session" href="#pyspectre.core.Session">Session</a>) ‑> list[tuple[str, str]]</span>
+</code></dt>
+<dd>
+<div class="desc"><p>Retrieve all available analysis types in the current Spectre session.</p>
+<p>This function sends a command to the Spectre session to retrieve detailed
+information about a specific analysis type (in this case, "ac"). It then parses
+the command output to extract and return a list of analysis types and their
+descriptions.</p>
+<h2 id="parameters">Parameters</h2>
+<dl>
+<dt><strong><code>session</code></strong> :&ensp;<code><a title="pyspectre.core.Session" href="#pyspectre.core.Session">Session</a></code></dt>
+<dd>An instance of the <code><a title="pyspectre.core.Session" href="#pyspectre.core.Session">Session</a></code> class representing the active Spectre session.
+The session contains necessary information, including the raw output file
+and the current offset for reading results.</dd>
+</dl>
+<h2 id="returns">Returns</h2>
+<dl>
+<dt><code>list[tuple[str, str]]</code></dt>
+<dd>A list of tuples, where each tuple contains:
+- The name of the analysis type as the first element (str).
+- A description about the analysis type as the second element (str).</dd>
+</dl></div>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def list_analysis_types(session: Session) -&gt; list[tuple[str, str]]:
+    &#34;&#34;&#34;Retrieve all available analysis types in the current Spectre session.
+
+    This function sends a command to the Spectre session to retrieve detailed
+    information about a specific analysis type (in this case, &#34;ac&#34;). It then parses
+    the command output to extract and return a list of analysis types and their
+    descriptions.
+
+    Parameters
+    ----------
+    session : Session
+        An instance of the `Session` class representing the active Spectre session.
+        The session contains necessary information, including the raw output file
+        and the current offset for reading results.
+
+    Returns
+    -------
+    list[tuple[str, str]]
+        A list of tuples, where each tuple contains:
+        - The name of the analysis type as the first element (str).
+        - A description about the analysis type as the second element (str).
+    &#34;&#34;&#34;
+    cmd = &#39;(sclHelp (sclGetAnalysis &#34;ac&#34;)&#39;
+    run_command(session, cmd)
+    raw_list = session.repl.before.decode(&#39;utf-8&#39;).split(&#39;\n&#39;)[1:]
+    return re.findall(r&#39;\(&#34;([^&#34;]+)&#34;\s+&#34;([^&#34;]+)&#34;\)&#39;, &#39; &#39;.join(raw_list))</code></pre>
+</details>
+</dd>
+<dt id="pyspectre.core.list_circuit_parameters"><code class="name flex">
+<span>def <span class="ident">list_circuit_parameters</span></span>(<span>session: <a title="pyspectre.core.Session" href="#pyspectre.core.Session">Session</a>) ‑> list[str]</span>
+</code></dt>
+<dd>
+<div class="desc"><p>Retrieve a list of all circuit parameters in the current Spectre session.</p>
+<p>This function sends a command to the Spectre session to list all available
+circuit parameters. It then parses the command output and returns a list
+of parameter names.</p>
+<h2 id="parameters">Parameters</h2>
+<dl>
+<dt><strong><code>session</code></strong> :&ensp;<code><a title="pyspectre.core.Session" href="#pyspectre.core.Session">Session</a></code></dt>
+<dd>An instance of the <code><a title="pyspectre.core.Session" href="#pyspectre.core.Session">Session</a></code> class representing the active Spectre session.
+The session contains necessary information, including the raw output file
+and the current offset for reading results.</dd>
+</dl>
+<h2 id="returns">Returns</h2>
+<dl>
+<dt><code>list[str]</code></dt>
+<dd>A list of strings where each string is the name of a circuit parameter
+available in the current Spectre session.</dd>
+</dl></div>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def list_circuit_parameters(session: Session) -&gt; list[str]:
+    &#34;&#34;&#34;Retrieve a list of all circuit parameters in the current Spectre session.
+
+    This function sends a command to the Spectre session to list all available
+    circuit parameters. It then parses the command output and returns a list
+    of parameter names.
+
+    Parameters
+    ----------
+    session : Session
+        An instance of the `Session` class representing the active Spectre session.
+        The session contains necessary information, including the raw output file
+        and the current offset for reading results.
+
+    Returns
+    -------
+    list[str]
+        A list of strings where each string is the name of a circuit parameter
+        available in the current Spectre session.
+    &#34;&#34;&#34;
+    cmd = &#39;(sclListParameter (sclGetCircuit &#34;&#34;))&#39;
+    run_command(session, cmd)
+    raw_list = session.repl.before.decode(&#39;utf-8&#39;).split(&#39;\n&#39;)[1:]
+    return re.findall(r&#39;\(&#34;([^&#34;]+)&#34;\s+&#34;.*?&#34;\)&#39;, &#39; &#39;.join(raw_list))</code></pre>
+</details>
+</dd>
+<dt id="pyspectre.core.list_instance_parameters"><code class="name flex">
+<span>def <span class="ident">list_instance_parameters</span></span>(<span>session: <a title="pyspectre.core.Session" href="#pyspectre.core.Session">Session</a>, instance_name: str) ‑> list[tuple[str, str]]</span>
+</code></dt>
+<dd>
+<div class="desc"><p>Retrieve the parameters and their values for a specified instance.</p>
+<p>This function sends a command to the Spectre session to list all parameters
+associated with a specific instance. It then parses the command output and
+returns a list of tuples, where each tuple contains a parameter name and its
+corresponding value.</p>
+<h2 id="parameters">Parameters</h2>
+<dl>
+<dt><strong><code>session</code></strong> :&ensp;<code><a title="pyspectre.core.Session" href="#pyspectre.core.Session">Session</a></code></dt>
+<dd>An instance of the <code><a title="pyspectre.core.Session" href="#pyspectre.core.Session">Session</a></code> class representing the active Spectre session.
+The session contains necessary information, including the raw output file
+and the current offset for reading results.</dd>
+<dt><strong><code>instance_name</code></strong> :&ensp;<code>str</code></dt>
+<dd>The name of the instance whose parameters are to be retrieved. This should
+be a valid instance name within the current Spectre session.</dd>
+</dl>
+<h2 id="returns">Returns</h2>
+<dl>
+<dt><code>list[tuple[str, str]]</code></dt>
+<dd>A list of tuples where each tuple contains:
+- The name of the parameter (str).
+- The value of the parameter (str).</dd>
+</dl></div>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def list_instance_parameters(session: Session, instance_name: str) -&gt; list[tuple[str, str]]:
+    &#34;&#34;&#34;Retrieve the parameters and their values for a specified instance.
+
+    This function sends a command to the Spectre session to list all parameters
+    associated with a specific instance. It then parses the command output and
+    returns a list of tuples, where each tuple contains a parameter name and its
+    corresponding value.
+
+    Parameters
+    ----------
+    session : Session
+        An instance of the `Session` class representing the active Spectre session.
+        The session contains necessary information, including the raw output file
+        and the current offset for reading results.
+    instance_name : str
+        The name of the instance whose parameters are to be retrieved. This should
+        be a valid instance name within the current Spectre session.
+
+    Returns
+    -------
+    list[tuple[str, str]]
+        A list of tuples where each tuple contains:
+        - The name of the parameter (str).
+        - The value of the parameter (str).
+    &#34;&#34;&#34;
+    cmd = f&#39;(sclListParameter (sclGetInstance &#34;{instance_name}&#34;))&#39;
+    run_command(session, cmd)
+    raw_list = session.repl.before.decode(&#39;utf-8&#39;).split(&#39;\n&#39;)[1:]
+    return re.findall(r&#39;\(&#34;([^&#34;]+)&#34;\s+&#34;.*?&#34;\)&#39;, &#39; &#39;.join(raw_list))</code></pre>
+</details>
+</dd>
+<dt id="pyspectre.core.list_instances"><code class="name flex">
+<span>def <span class="ident">list_instances</span></span>(<span>session: <a title="pyspectre.core.Session" href="#pyspectre.core.Session">Session</a>) ‑> list[str]</span>
+</code></dt>
+<dd>
+<div class="desc"><p>Retrieve a list of all components inthe circuit.</p>
+<p>This function sends a command to the Spectre session to list all available
+instances. It then parses the command output and returns a list of instance
+names.</p>
+<h2 id="parameters">Parameters</h2>
+<dl>
+<dt><strong><code>session</code></strong> :&ensp;<code><a title="pyspectre.core.Session" href="#pyspectre.core.Session">Session</a></code></dt>
+<dd>An instance of the <code><a title="pyspectre.core.Session" href="#pyspectre.core.Session">Session</a></code> class representing the active Spectre session.
+The session contains necessary information, including the raw output file
+and the current offset for reading results.</dd>
+</dl>
+<h2 id="returns">Returns</h2>
+<dl>
+<dt><code>list[str]</code></dt>
+<dd>A list of strings where each string is the name of an component or instance available
+in the current Spectre session.</dd>
+</dl></div>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def list_instances(session: Session) -&gt; list[str]:
+    &#34;&#34;&#34;Retrieve a list of all components inthe circuit.
+
+    This function sends a command to the Spectre session to list all available
+    instances. It then parses the command output and returns a list of instance
+    names.
+
+    Parameters
+    ----------
+    session : Session
+        An instance of the `Session` class representing the active Spectre session.
+        The session contains necessary information, including the raw output file
+        and the current offset for reading results.
+
+    Returns
+    -------
+    list[str]
+        A list of strings where each string is the name of an component or instance available
+        in the current Spectre session.
+    &#34;&#34;&#34;
+    cmd = &#39;(sclListInstance)&#39;
+    run_command(session, cmd)
+    raw_list = session.repl.before.decode(&#39;utf-8&#39;).split(&#39;\n&#39;)[1:]
+    return re.findall(r&#39;\(&#34;([^&#34;]+)&#34;\s+&#34;([^&#34;]+)&#34;\)&#39;, &#39; &#39;.join(raw_list))</code></pre>
+</details>
+</dd>
+<dt id="pyspectre.core.list_nets"><code class="name flex">
+<span>def <span class="ident">list_nets</span></span>(<span>session: <a title="pyspectre.core.Session" href="#pyspectre.core.Session">Session</a>) ‑> list[str]</span>
+</code></dt>
+<dd>
+<div class="desc"><p>Retrieve a list of all nets in the circuit.</p>
+<p>This function sends a command to the Spectre session to list all available
+nets. It then parses the command output and returns a list of net names.</p>
+<h2 id="parameters">Parameters</h2>
+<dl>
+<dt><strong><code>session</code></strong> :&ensp;<code><a title="pyspectre.core.Session" href="#pyspectre.core.Session">Session</a></code></dt>
+<dd>An instance of the <code><a title="pyspectre.core.Session" href="#pyspectre.core.Session">Session</a></code> class representing the active Spectre session.
+The session contains necessary information, including the raw output file
+and the current offset for reading results.</dd>
+</dl>
+<h2 id="returns">Returns</h2>
+<dl>
+<dt><code>list[str]</code></dt>
+<dd>A list of strings where each string is the name of a net available
+in the current Spectre session.</dd>
+</dl></div>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def list_nets(session: Session) -&gt; list[str]:
+    &#34;&#34;&#34;Retrieve a list of all nets in the circuit.
+
+    This function sends a command to the Spectre session to list all available
+    nets. It then parses the command output and returns a list of net names.
+
+    Parameters
+    ----------
+    session : Session
+        An instance of the `Session` class representing the active Spectre session.
+        The session contains necessary information, including the raw output file
+        and the current offset for reading results.
+
+    Returns
+    -------
+    list[str]
+        A list of strings where each string is the name of a net available
+        in the current Spectre session.
+    &#34;&#34;&#34;
+    cmd = &#39;(sclListNet)&#39;
+    run_command(session, cmd)
+    raw_list = session.repl.before.decode(&#39;utf-8&#39;).split(&#39;\n&#39;)
+    return re.findall(r&#39;&#34;(.*?)&#34;&#39;, &#39; &#39;.join(raw_list))</code></pre>
+</details>
+</dd>
+<dt id="pyspectre.core.log_fifo"><code class="name flex">
+<span>def <span class="ident">log_fifo</span></span>(<span>log_path: str) ‑> str</span>
+</code></dt>
+<dd>
+<div class="desc"><p>Create fifo buffer for spectre log file</p></div>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def log_fifo(log_path: str) -&gt; str:
+    &#34;&#34;&#34;
+    Create fifo buffer for spectre log file
+    &#34;&#34;&#34;
+    path = f&#39;{log_path}.log&#39;
+    mode = 0o600
+    os.mkfifo(path, mode)
+    Popen(f&#39;cat {path} &gt; /dev/null 2&gt;&amp;1 &amp;&#39;, shell=True)
+    return path</code></pre>
 </details>
 </dd>
 <dt id="pyspectre.core.netlist_to_tmp"><code class="name flex">
@@ -304,7 +1788,7 @@ def stop_session(session, remove_raw: bool = False) -&gt; bool:
     &#34;&#34;&#34;
     Write a netlist to a temporary file
     &#34;&#34;&#34;
-    tmp  = NamedTemporaryFile(mode = &#39;w&#39;, suffix = &#39;.scs&#39;, delete = False)
+    tmp = NamedTemporaryFile(mode=&#39;w&#39;, suffix=&#39;.scs&#39;, delete=False)
     path = tmp.name
     tmp.write(netlist)
     tmp.close()
@@ -324,16 +1808,16 @@ def stop_session(session, remove_raw: bool = False) -&gt; bool:
     &#34;&#34;&#34;
     Raw simulation results in /tmp
     &#34;&#34;&#34;
-    pre  = f&#39;{os.path.splitext(os.path.basename(net_path))[0]}&#39;
-    suf  = &#39;.raw&#39;
-    tmp  = NamedTemporaryFile(prefix = pre, suffix = suf, delete = False)
+    pre = f&#39;{os.path.splitext(os.path.basename(net_path))[0]}&#39;
+    suf = &#39;.raw&#39;
+    tmp = NamedTemporaryFile(prefix=pre, suffix=suf, delete=False)
     path = tmp.name
     tmp.close()
     return path</code></pre>
 </details>
 </dd>
 <dt id="pyspectre.core.read_results"><code class="name flex">
-<span>def <span class="ident">read_results</span></span>(<span>raw_file: str) ‑> dict[str, pandas.core.frame.DataFrame]</span>
+<span>def <span class="ident">read_results</span></span>(<span>raw_file: str, offset: int = 0) ‑> Dict[str, pandas.core.frame.DataFrame]</span>
 </code></dt>
 <dd>
 <div class="desc"><p>Read simulation results</p></div>
@@ -341,47 +1825,106 @@ def stop_session(session, remove_raw: bool = False) -&gt; bool:
 <summary>
 <span>Expand source code</span>
 </summary>
-<pre><code class="python">def read_results(raw_file: str) -&gt; dict[str, DataFrame]:
+<pre><code class="python">def read_results(raw_file: str, offset: int = 0) -&gt; Dict[str, DataFrame]:
     &#34;&#34;&#34;
     Read simulation results
     &#34;&#34;&#34;
     if not os.path.isfile(raw_file):
-        raise(FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT), raw_file))
+        raise (FileNotFoundError(errno.ENOENT,
+               os.strerror(errno.ENOENT), raw_file))
     if not os.access(raw_file, os.R_OK):
-        raise(PermissionError(errno.EACCES, os.strerror(errno.EACCES), raw_file))
+        raise (PermissionError(errno.EACCES, os.strerror(errno.EACCES), raw_file))
 
-    return plot_dict(read_raw(raw_file))</code></pre>
+    return plot_dict(read_raw(raw_file, off_set=offset))</code></pre>
 </details>
 </dd>
 <dt id="pyspectre.core.run_all"><code class="name flex">
-<span>def <span class="ident">run_all</span></span>(<span>session: <a title="pyspectre.core.Session" href="#pyspectre.core.Session">Session</a>) ‑> dict[str, pandas.core.frame.DataFrame]</span>
+<span>def <span class="ident">run_all</span></span>(<span>session: <a title="pyspectre.core.Session" href="#pyspectre.core.Session">Session</a>) ‑> Dict[str, pandas.core.frame.DataFrame]</span>
 </code></dt>
 <dd>
-<div class="desc"><p>Run all simulation analyses</p></div>
+<div class="desc"><p>Run all simulation analyses in the Spectre session and retrieve the results.</p>
+<h2 id="parameters">Parameters</h2>
+<dl>
+<dt><strong><code>session</code></strong> :&ensp;<code><a title="pyspectre.core.Session" href="#pyspectre.core.Session">Session</a></code></dt>
+<dd>An instance of the <code><a title="pyspectre.core.Session" href="#pyspectre.core.Session">Session</a></code> class representing the active Spectre session.
+The session contains necessary information, including the raw output file
+and the current offset for reading results.</dd>
+</dl>
+<h2 id="returns">Returns</h2>
+<dl>
+<dt><code>Dict[str, DataFrame]</code></dt>
+<dd>A dictionary where the keys are the names of the analyses, and the values
+are pandas DataFrames containing the results of each analysis.</dd>
+</dl></div>
 <details class="source">
 <summary>
 <span>Expand source code</span>
 </summary>
-<pre><code class="python">def run_all(session: Session) -&gt; dict[str, DataFrame]:
-    &#34;&#34;&#34;
-    Run all simulation analyses
+<pre><code class="python">def run_all(session: Session) -&gt; Dict[str, DataFrame]:
+    &#34;&#34;&#34;Run all simulation analyses in the Spectre session and retrieve the results.
+
+    Parameters
+    ----------
+    session : Session
+        An instance of the `Session` class representing the active Spectre session.
+        The session contains necessary information, including the raw output file
+        and the current offset for reading results.
+
+    Returns
+    -------
+    Dict[str, DataFrame]
+        A dictionary where the keys are the names of the analyses, and the values
+        are pandas DataFrames containing the results of each analysis.
     &#34;&#34;&#34;
     run_command(session, &#39;(sclRun &#34;all&#34;)&#39;)
-    return read_results(session.raw_file)</code></pre>
+    res = read_results(session.raw_file, offset=session.offset)
+    session.offset = res.get(&#39;offset&#39;, 0)
+    return {n: p for n, p in res.items() if n != &#39;offset&#39;}</code></pre>
 </details>
 </dd>
 <dt id="pyspectre.core.run_analysis"><code class="name flex">
-<span>def <span class="ident">run_analysis</span></span>(<span>session: <a title="pyspectre.core.Session" href="#pyspectre.core.Session">Session</a>, analysis: str) ‑> dict[str, pandas.core.frame.DataFrame]</span>
+<span>def <span class="ident">run_analysis</span></span>(<span>session: <a title="pyspectre.core.Session" href="#pyspectre.core.Session">Session</a>, analysis: str) ‑> Dict[str, pandas.core.frame.DataFrame]</span>
 </code></dt>
 <dd>
-<div class="desc"><p>Run only the given analysis.</p></div>
+<div class="desc"><p>Run a specific analysis in the active Spectre session.</p>
+<h2 id="parameters">Parameters</h2>
+<dl>
+<dt><strong><code>session</code></strong> :&ensp;<code><a title="pyspectre.core.Session" href="#pyspectre.core.Session">Session</a></code></dt>
+<dd>An instance of the <code><a title="pyspectre.core.Session" href="#pyspectre.core.Session">Session</a></code> class representing the active Spectre session.
+The session contains necessary information, including the raw output file
+and the current offset for reading results.</dd>
+<dt><strong><code>analysis</code></strong> :&ensp;<code>str</code></dt>
+<dd>The name of the analysis to be run. This should correspond to an analysis
+that is recognized by the Spectre session.</dd>
+</dl>
+<h2 id="returns">Returns</h2>
+<dl>
+<dt><code>Dict[str, DataFrame]</code></dt>
+<dd>A dictionary where the keys are the names of the analysis results, and the
+values are pandas DataFrames containing the data from each result.</dd>
+</dl></div>
 <details class="source">
 <summary>
 <span>Expand source code</span>
 </summary>
-<pre><code class="python">def run_analysis(session: Session, analysis: str) -&gt; dict[str, DataFrame]:
-    &#34;&#34;&#34;
-    Run only the given analysis.
+<pre><code class="python">def run_analysis(session: Session, analysis: str) -&gt; Dict[str, DataFrame]:
+    &#34;&#34;&#34;Run a specific analysis in the active Spectre session.
+
+    Parameters
+    ----------
+    session : Session
+        An instance of the `Session` class representing the active Spectre session.
+        The session contains necessary information, including the raw output file
+        and the current offset for reading results.
+    analysis : str
+        The name of the analysis to be run. This should correspond to an analysis
+        that is recognized by the Spectre session.
+
+    Returns
+    -------
+    Dict[str, DataFrame]
+        A dictionary where the keys are the names of the analysis results, and the
+        values are pandas DataFrames containing the data from each result.
     &#34;&#34;&#34;
     cmd = f&#39;(sclRunAnalysis (sclGetAnalysis &#34;{analysis}&#34;))&#39;
     run_command(session, cmd)
@@ -392,58 +1935,427 @@ def stop_session(session, remove_raw: bool = False) -&gt; bool:
 <span>def <span class="ident">run_command</span></span>(<span>session: <a title="pyspectre.core.Session" href="#pyspectre.core.Session">Session</a>, command: str) ‑> bool</span>
 </code></dt>
 <dd>
-<div class="desc"><p>Internal function for running an arbitrary scl command. Returns True or
-false based on what the previous command returned.</p></div>
+<div class="desc"><p>Execute an arbitrary SCL command within an active Spectre session.</p>
+<p>This internal function sends a specified command to the Spectre process and checks
+the process's response. It returns <code>True</code> if the command was successful based on
+the process's output, and <code>False</code> otherwise. If an error is detected, a warning
+is issued indicating that Spectre might have crashed.</p>
+<h2 id="parameters">Parameters</h2>
+<dl>
+<dt><strong><code>session</code></strong> :&ensp;<code><a title="pyspectre.core.Session" href="#pyspectre.core.Session">Session</a></code></dt>
+<dd>An instance of the <code><a title="pyspectre.core.Session" href="#pyspectre.core.Session">Session</a></code> class representing the active Spectre session.
+The session includes the process handle (<code>repl</code>) and expected output prompt.</dd>
+<dt><strong><code>command</code></strong> :&ensp;<code>str</code></dt>
+<dd>The SCL command to be executed in the Spectre session.</dd>
+</dl>
+<h2 id="returns">Returns</h2>
+<dl>
+<dt><code>bool</code></dt>
+<dd><code>True</code> if the command was executed successfully (i.e., the expected prompt
+was received after the command). <code>False</code> if the command execution did not
+result in the expected output.</dd>
+</dl>
+<h2 id="raises">Raises</h2>
+<dl>
+<dt><code>RuntimeError</code></dt>
+<dd>If the Spectre session is no longer active (i.e., the process has terminated),
+making it impossible to execute the command.</dd>
+</dl>
+<h2 id="warns">Warns</h2>
+<dl>
+<dt><code>RuntimeWarning</code></dt>
+<dd>If the Spectre process does not return the expected prompt, indicating that
+the process might have crashed.</dd>
+</dl></div>
 <details class="source">
 <summary>
 <span>Expand source code</span>
 </summary>
 <pre><code class="python">def run_command(session: Session, command: str) -&gt; bool:
+    &#34;&#34;&#34;Execute an arbitrary SCL command within an active Spectre session.
+
+    This internal function sends a specified command to the Spectre process and checks
+    the process&#39;s response. It returns `True` if the command was successful based on
+    the process&#39;s output, and `False` otherwise. If an error is detected, a warning
+    is issued indicating that Spectre might have crashed.
+
+    Parameters
+    ----------
+    session : Session
+        An instance of the `Session` class representing the active Spectre session.
+        The session includes the process handle (`repl`) and expected output prompt.
+    command : str
+        The SCL command to be executed in the Spectre session.
+
+    Returns
+    -------
+    bool
+        `True` if the command was executed successfully (i.e., the expected prompt
+        was received after the command). `False` if the command execution did not
+        result in the expected output.
+
+    Raises
+    ------
+    RuntimeError
+        If the Spectre session is no longer active (i.e., the process has terminated),
+        making it impossible to execute the command.
+
+    Warns
+    -----
+    RuntimeWarning
+        If the Spectre process does not return the expected prompt, indicating that
+        the process might have crashed.
     &#34;&#34;&#34;
-    Internal function for running an arbitrary scl command. Returns True or
-    false based on what the previous command returned.
+    # The command does not crash if a bracket is missing
+    if not command.count(&#39;(&#39;) == command.count(&#39;)&#39;):
+        raise RuntimeError(f&#34;Syntax Error. Check Brackets in command :{command}&#34;)
+
+    if session.repl.isalive():
+        try:
+            session.repl.sendline(command)
+            ret = session.repl.expect(session.prompt)
+            if ret != 0:
+                warnings.warn(f&#34;Spectre might have crashed while executing command: {command}&#34;,
+                              RuntimeWarning)
+            return ret == 0
+        except pexpect.exceptions.ExceptionPexpect as e:
+            # Handle any unexpected pexpect exceptions
+            error_message = f&#34;An error occurred while executing command &#39;{command}&#39;: {str(e)}&#34;
+            raise RuntimeError(error_message) from e
+    else:
+        raise RuntimeError(&#34;The Spectre session is no longer active. Unable to execute command.&#34;)</code></pre>
+</details>
+</dd>
+<dt id="pyspectre.core.set_analysis_parameter"><code class="name flex">
+<span>def <span class="ident">set_analysis_parameter</span></span>(<span>session: <a title="pyspectre.core.Session" href="#pyspectre.core.Session">Session</a>, analysis_name: str, parameter_name: str, attribute_name: str, value: str) ‑> bool</span>
+</code></dt>
+<dd>
+<div class="desc"><p>Set the value of a specific attribute for a parameter in a given analysis.</p>
+<p>This function sends a command to the Spectre session to set the value of a
+specified attribute for a parameter within a particular analysis. The command
+is constructed based on the provided analysis name, parameter name, attribute
+name, and the new value.</p>
+<h2 id="parameters">Parameters</h2>
+<dl>
+<dt><strong><code>session</code></strong> :&ensp;<code><a title="pyspectre.core.Session" href="#pyspectre.core.Session">Session</a></code></dt>
+<dd>An instance of the <code><a title="pyspectre.core.Session" href="#pyspectre.core.Session">Session</a></code> class representing the active Spectre session.
+The session contains necessary information, including the raw output file
+and the current offset for reading results.</dd>
+<dt><strong><code>analysis_name</code></strong> :&ensp;<code>str</code></dt>
+<dd>The name of the analysis that contains the parameter to be modified. This
+should be a valid analysis name within the current Spectre session.</dd>
+<dt><strong><code>parameter_name</code></strong> :&ensp;<code>str</code></dt>
+<dd>The name of the parameter whose attribute is to be set. This should be a
+valid parameter name within the specified analysis.</dd>
+<dt><strong><code>attribute_name</code></strong> :&ensp;<code>str</code></dt>
+<dd>The name of the attribute to be modified. This should be a valid attribute
+name for the specified parameter.</dd>
+<dt><strong><code>value</code></strong> :&ensp;<code>str</code></dt>
+<dd>The new value to set for the specified attribute.</dd>
+</dl>
+<h2 id="returns">Returns</h2>
+<dl>
+<dt><code>bool</code></dt>
+<dd><code>True</code> if the command to set the attribute was successfully executed,
+<code>False</code> otherwise.</dd>
+</dl></div>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def set_analysis_parameter(session: Session, analysis_name: str, parameter_name: str,
+                           attribute_name: str, value: str) -&gt; bool:
+    &#34;&#34;&#34;Set the value of a specific attribute for a parameter in a given analysis.
+
+    This function sends a command to the Spectre session to set the value of a
+    specified attribute for a parameter within a particular analysis. The command
+    is constructed based on the provided analysis name, parameter name, attribute
+    name, and the new value.
+
+    Parameters
+    ----------
+    session : Session
+        An instance of the `Session` class representing the active Spectre session.
+        The session contains necessary information, including the raw output file
+        and the current offset for reading results.
+    analysis_name : str
+        The name of the analysis that contains the parameter to be modified. This
+        should be a valid analysis name within the current Spectre session.
+    parameter_name : str
+        The name of the parameter whose attribute is to be set. This should be a
+        valid parameter name within the specified analysis.
+    attribute_name : str
+        The name of the attribute to be modified. This should be a valid attribute
+        name for the specified parameter.
+    value : str
+        The new value to set for the specified attribute.
+
+    Returns
+    -------
+    bool
+        `True` if the command to set the attribute was successfully executed,
+        `False` otherwise.
     &#34;&#34;&#34;
-    session.repl.sendline(command)
-    return session.repl.expect(session.prompt) == 0</code></pre>
+    cmd = (
+        f&#39;(sclSetAttribute (sclGetParameter (sclGetAnalysis &#34;{analysis_name}&#34;) &#34;{parameter_name}&#34;) &#39;
+        f&#39;&#34;{attribute_name}&#34; &#34;{value}&#34;)&#39;
+    )
+    return run_command(session, cmd)</code></pre>
+</details>
+</dd>
+<dt id="pyspectre.core.set_circuit_parameter"><code class="name flex">
+<span>def <span class="ident">set_circuit_parameter</span></span>(<span>session: <a title="pyspectre.core.Session" href="#pyspectre.core.Session">Session</a>, circuit_parameter: str, attribute_name: str, value: str) ‑> bool</span>
+</code></dt>
+<dd>
+<div class="desc"><p>Set the value of a specific attribute for a circuit parameter in the current Spectre session.</p>
+<p>This function sends a command to the Spectre session to set the value of a
+specified attribute for a circuit parameter. The command is constructed based
+on the provided circuit parameter name, attribute name, and the new value.</p>
+<h2 id="parameters">Parameters</h2>
+<dl>
+<dt><strong><code>session</code></strong> :&ensp;<code><a title="pyspectre.core.Session" href="#pyspectre.core.Session">Session</a></code></dt>
+<dd>An instance of the <code><a title="pyspectre.core.Session" href="#pyspectre.core.Session">Session</a></code> class representing the active Spectre session.
+The session contains necessary information, including the raw output file
+and the current offset for reading results.</dd>
+<dt><strong><code>circuit_parameter</code></strong> :&ensp;<code>str</code></dt>
+<dd>The name of the circuit parameter whose attribute is to be set. This should
+be a valid circuit parameter name within the current Spectre session.</dd>
+<dt><strong><code>attribute_name</code></strong> :&ensp;<code>str</code></dt>
+<dd>The name of the attribute to be modified. This should be a valid attribute
+name for the specified circuit parameter.</dd>
+<dt><strong><code>value</code></strong> :&ensp;<code>str</code></dt>
+<dd>The new value to set for the specified attribute.</dd>
+</dl>
+<h2 id="returns">Returns</h2>
+<dl>
+<dt><code>bool</code></dt>
+<dd><code>True</code> if the command to set the attribute was successfully executed,
+<code>False</code> otherwise.</dd>
+</dl></div>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def set_circuit_parameter(session: Session, circuit_parameter: str, attribute_name: str,
+                          value: str) -&gt; bool:
+    &#34;&#34;&#34;Set the value of a specific attribute for a circuit parameter in the current Spectre session.
+
+    This function sends a command to the Spectre session to set the value of a
+    specified attribute for a circuit parameter. The command is constructed based
+    on the provided circuit parameter name, attribute name, and the new value.
+
+    Parameters
+    ----------
+    session : Session
+        An instance of the `Session` class representing the active Spectre session.
+        The session contains necessary information, including the raw output file
+        and the current offset for reading results.
+    circuit_parameter : str
+        The name of the circuit parameter whose attribute is to be set. This should
+        be a valid circuit parameter name within the current Spectre session.
+    attribute_name : str
+        The name of the attribute to be modified. This should be a valid attribute
+        name for the specified circuit parameter.
+    value : str
+        The new value to set for the specified attribute.
+
+    Returns
+    -------
+    bool
+        `True` if the command to set the attribute was successfully executed,
+        `False` otherwise.
+    &#34;&#34;&#34;
+    cmd = (
+        f&#39;(sclSetAttribute (sclGetParameter (sclGetCircuit &#34;&#34;) &#34;{circuit_parameter}&#34;) &#39;
+        f&#39;&#34;{attribute_name}&#34; &#34;{value}&#34;)&#39;
+    )
+    return run_command(session, cmd)</code></pre>
+</details>
+</dd>
+<dt id="pyspectre.core.set_instance_parameter"><code class="name flex">
+<span>def <span class="ident">set_instance_parameter</span></span>(<span>session: <a title="pyspectre.core.Session" href="#pyspectre.core.Session">Session</a>, instance_name: str, instance_parameter: str, attribute_name: str, value: str) ‑> bool</span>
+</code></dt>
+<dd>
+<div class="desc"><p>Set the value of a specific attribute for a parameter of an instance.</p>
+<p>This function sends a command to the Spectre session to set the value of a
+specified attribute for a parameter within a particular instance. The command
+is constructed based on the provided instance name, parameter name, attribute
+name, and the new value.</p>
+<h2 id="parameters">Parameters</h2>
+<dl>
+<dt><strong><code>session</code></strong> :&ensp;<code><a title="pyspectre.core.Session" href="#pyspectre.core.Session">Session</a></code></dt>
+<dd>An instance of the <code><a title="pyspectre.core.Session" href="#pyspectre.core.Session">Session</a></code> class representing the active Spectre session.
+The session contains necessary information, including the raw output file
+and the current offset for reading results.</dd>
+<dt><strong><code>instance_name</code></strong> :&ensp;<code>str</code></dt>
+<dd>The name of the instance that contains the parameter to be modified. This
+should be a valid instance name within the current Spectre session.</dd>
+<dt><strong><code>instance_parameter</code></strong> :&ensp;<code>str</code></dt>
+<dd>The name of the parameter whose attribute is to be set. This should be a
+valid parameter name within the specified instance.</dd>
+<dt><strong><code>attribute_name</code></strong> :&ensp;<code>str</code></dt>
+<dd>The name of the attribute to be modified. This should be a valid attribute
+name for the specified parameter.</dd>
+<dt><strong><code>value</code></strong> :&ensp;<code>str</code></dt>
+<dd>The new value to set for the specified attribute.</dd>
+</dl>
+<h2 id="returns">Returns</h2>
+<dl>
+<dt><code>bool</code></dt>
+<dd><code>True</code> if the command to set the attribute was successfully executed,
+<code>False</code> otherwise.</dd>
+</dl></div>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">def set_instance_parameter(session: Session, instance_name: str, instance_parameter: str,
+                           attribute_name: str, value: str) -&gt; bool:
+    &#34;&#34;&#34;Set the value of a specific attribute for a parameter of an instance.
+
+    This function sends a command to the Spectre session to set the value of a
+    specified attribute for a parameter within a particular instance. The command
+    is constructed based on the provided instance name, parameter name, attribute
+    name, and the new value.
+
+    Parameters
+    ----------
+    session : Session
+        An instance of the `Session` class representing the active Spectre session.
+        The session contains necessary information, including the raw output file
+        and the current offset for reading results.
+    instance_name : str
+        The name of the instance that contains the parameter to be modified. This
+        should be a valid instance name within the current Spectre session.
+    instance_parameter : str
+        The name of the parameter whose attribute is to be set. This should be a
+        valid parameter name within the specified instance.
+    attribute_name : str
+        The name of the attribute to be modified. This should be a valid attribute
+        name for the specified parameter.
+    value : str
+        The new value to set for the specified attribute.
+
+    Returns
+    -------
+    bool
+        `True` if the command to set the attribute was successfully executed,
+        `False` otherwise.
+    &#34;&#34;&#34;
+    cmd = (
+        f&#39;(sclSetAttribute (sclGetParameter (sclGetInstance &#34;{instance_name}&#34;) &#39;
+        f&#39;&#34;{instance_parameter}&#34;) &#34;{attribute_name}&#34; &#34;{value}&#34;)&#39;
+    )
+    return run_command(session, cmd)</code></pre>
 </details>
 </dd>
 <dt id="pyspectre.core.set_parameter"><code class="name flex">
 <span>def <span class="ident">set_parameter</span></span>(<span>session: <a title="pyspectre.core.Session" href="#pyspectre.core.Session">Session</a>, param: str, value: float) ‑> bool</span>
 </code></dt>
 <dd>
-<div class="desc"><p>Change a parameter in the netlist. Returns True if successful, False
-otherwise.</p></div>
+<div class="desc"><p>Change the value of a netlist parameter in the Spectre session.</p>
+<p>This function sends a command to the Spectre session to update the value of
+a specified parameter in the netlist. It returns <code>True</code> if the parameter
+value was successfully changed, and <code>False</code> otherwise.</p>
+<h2 id="parameters">Parameters</h2>
+<dl>
+<dt><strong><code>session</code></strong> :&ensp;<code><a title="pyspectre.core.Session" href="#pyspectre.core.Session">Session</a></code></dt>
+<dd>An instance of the <code><a title="pyspectre.core.Session" href="#pyspectre.core.Session">Session</a></code> class representing the active Spectre session.
+The session contains necessary information, including the raw output file
+and the current offset for reading results.</dd>
+<dt><strong><code>param</code></strong> :&ensp;<code>str</code></dt>
+<dd>The name of the netlist parameter whose value is to be changed.</dd>
+<dt><strong><code>value</code></strong> :&ensp;<code>float</code></dt>
+<dd>The new value to be assigned to the specified parameter.</dd>
+</dl>
+<h2 id="returns">Returns</h2>
+<dl>
+<dt><code>bool</code></dt>
+<dd><code>True</code> if the parameter value was successfully updated, <code>False</code> if the
+command failed or the parameter could not be changed.</dd>
+</dl></div>
 <details class="source">
 <summary>
 <span>Expand source code</span>
 </summary>
 <pre><code class="python">def set_parameter(session: Session, param: str, value: float) -&gt; bool:
     &#34;&#34;&#34;
-    Change a parameter in the netlist. Returns True if successful, False
-    otherwise.
+    Change the value of a netlist parameter in the Spectre session.
+
+    This function sends a command to the Spectre session to update the value of
+    a specified parameter in the netlist. It returns `True` if the parameter
+    value was successfully changed, and `False` otherwise.
+
+    Parameters
+    ----------
+    session : Session
+        An instance of the `Session` class representing the active Spectre session.
+        The session contains necessary information, including the raw output file
+        and the current offset for reading results.
+    param : str
+        The name of the netlist parameter whose value is to be changed.
+    value : float
+        The new value to be assigned to the specified parameter.
+
+    Returns
+    -------
+    bool
+        `True` if the parameter value was successfully updated, `False` if the
+        command failed or the parameter could not be changed.
     &#34;&#34;&#34;
     cmd = f&#39;(sclSetAttribute (sclGetParameter (sclGetCircuit &#34;&#34;) &#34;{param}&#34;) &#34;value&#34; {value})&#39;
     return run_command(session, cmd)</code></pre>
 </details>
 </dd>
 <dt id="pyspectre.core.set_parameters"><code class="name flex">
-<span>def <span class="ident">set_parameters</span></span>(<span>session: <a title="pyspectre.core.Session" href="#pyspectre.core.Session">Session</a>, params: dict[str, float]) ‑> bool</span>
+<span>def <span class="ident">set_parameters</span></span>(<span>session: <a title="pyspectre.core.Session" href="#pyspectre.core.Session">Session</a>, params: Dict[str, float]) ‑> bool</span>
 </code></dt>
 <dd>
-<div class="desc"><p>Set a list of parameters</p></div>
+<div class="desc"><p>Set the values for a list of netlist parameters in the Spectre session.</p>
+<h2 id="parameters">Parameters</h2>
+<dl>
+<dt><strong><code>session</code></strong> :&ensp;<code><a title="pyspectre.core.Session" href="#pyspectre.core.Session">Session</a></code></dt>
+<dd>An instance of the <code><a title="pyspectre.core.Session" href="#pyspectre.core.Session">Session</a></code> class representing the active Spectre session.
+The session contains necessary information, including the raw output file
+and the current offset for reading results.</dd>
+<dt><strong><code>params</code></strong> :&ensp;<code>Dict[str, float]</code></dt>
+<dd>A dictionary where the keys are the names of the netlist parameters and the
+values are the new values to be assigned to those parameters.</dd>
+</dl>
+<h2 id="returns">Returns</h2>
+<dl>
+<dt><code>bool</code></dt>
+<dd><code>True</code> if all parameters were successfully updated, <code>False</code> if any of the
+parameter updates failed.</dd>
+</dl></div>
 <details class="source">
 <summary>
 <span>Expand source code</span>
 </summary>
-<pre><code class="python">def set_parameters(session: Session, params: dict[str, float]) -&gt; bool:
+<pre><code class="python">def set_parameters(session: Session, params: Dict[str, float]) -&gt; bool:
+    &#34;&#34;&#34;Set the values for a list of netlist parameters in the Spectre session.
+
+    Parameters
+    ----------
+    session : Session
+        An instance of the `Session` class representing the active Spectre session.
+        The session contains necessary information, including the raw output file
+        and the current offset for reading results.
+    params : Dict[str, float]
+        A dictionary where the keys are the names of the netlist parameters and the
+        values are the new values to be assigned to those parameters.
+
+    Returns
+    -------
+    bool
+        `True` if all parameters were successfully updated, `False` if any of the
+        parameter updates failed.
     &#34;&#34;&#34;
-    Set a list of parameters
-    &#34;&#34;&#34;
-    return all(set_parameter(session, p, v) for p,v in params.items())</code></pre>
+    return all(set_parameter(session, p, v) for p, v in params.items())</code></pre>
 </details>
 </dd>
 <dt id="pyspectre.core.simulate"><code class="name flex">
-<span>def <span class="ident">simulate</span></span>(<span>netlist_path: str, includes: collections.abc.Iterable[str] = None, raw_path: str = None) ‑> dict[str, pandas.core.frame.DataFrame]</span>
+<span>def <span class="ident">simulate</span></span>(<span>netlist_path: str, includes: List[str] = None, raw_path: str = None, log_path: str = None, log_silent=True) ‑> Dict[str, pandas.core.frame.DataFrame]</span>
 </code></dt>
 <dd>
 <div class="desc"><p>Passes the given netlist path to spectre and reads the results in.</p></div>
@@ -451,44 +2363,54 @@ otherwise.</p></div>
 <summary>
 <span>Expand source code</span>
 </summary>
-<pre><code class="python">def simulate( netlist_path: str, includes: Iterable[str] = None
-            , raw_path: str = None ) -&gt; dict[str, DataFrame]:
+<pre><code class="python">def simulate(netlist_path: str, includes: List[str] = None, raw_path: str = None,
+             log_path: str = None, log_silent=True) -&gt; Dict[str, DataFrame]:
     &#34;&#34;&#34;
     Passes the given netlist path to spectre and reads the results in.
     &#34;&#34;&#34;
     net = os.path.expanduser(netlist_path)
-    inc = [f&#39;-I{os.path.expanduser(i)}&#39; for i in includes]
+    inc = [f&#39;-I{os.path.expanduser(i)}&#39; for i in includes] if includes else []
     raw = raw_path or raw_tmp(net)
-    cmd = [&#39;spectre&#39;, &#39;-64&#39;, &#39;-format nutbin&#39;, f&#39;-raw {raw}&#39;, &#39;-log&#39;
-          ] + inc + [net]
+    log = f&#39;{net}.log&#39; if not log_path else f&#39;{log_path}&#39;
+    if log_path and log_silent:
+        log_option = f&#39;=log {log_path}&#39;
+    elif log_path and not log_silent:
+        log_option = f&#39;+log {log_path}&#39;
+    elif (not log_path) and (not log_silent):
+        log_option = &#39;-log&#39;
+    else:
+        buf = log_fifo(log)
+        log_option = f&#39;=log {buf}&#39;
+
+    cmd = [&#39;spectre&#39;, &#39;-64&#39;, &#39;-format&#39;, &#39;nutbin&#39;, &#39;-raw&#39;, f&#39;{raw}&#39;
+           ] + [log_option] + inc + [net]
 
     if not os.path.isfile(net):
-        raise(FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT), net))
+        raise (FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT), net))
     if not os.access(net, os.R_OK):
-        raise(PermissionError(errno.EACCES, os.strerror(errno.EACCES), net))
+        raise (PermissionError(errno.EACCES, os.strerror(errno.EACCES), net))
 
-    #ret = os.system(cmd)
-    ret = run( cmd
-             , check          = False
-             , stdin          = DEVNULL
-             , stdout         = DEVNULL
-             , stderr         = DEVNULL
-             , capture_output = False
-             , ).returncode
+    # ret = os.system(cmd)
+    ret = run(cmd, check=True, stdin=DEVNULL, stdout=DEVNULL,
+              stderr=DEVNULL, capture_output=False, ).returncode
 
     if ret != 0:
-        raise(IOError(errno.EIO, os.strerror(errno.EIO), &#39;spectre&#39;))
-
+        if log_path:
+            with open(log_path, &#39;r&#39;, encoding=&#39;utf-8&#39;) as log_handle:
+                print(log_handle.read())
+        else:
+            raise (IOError(errno.EIO, os.strerror(errno.EIO),
+                   f&#39;spectre returned with non-zero exit code: {ret}&#39;, ))
     if not os.path.isfile(raw):
-        raise(FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT), raw))
+        raise (FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT), raw))
     if not os.access(raw, os.R_OK):
-        raise(PermissionError(errno.EACCES, os.strerror(errno.EACCES), raw))
+        raise (PermissionError(errno.EACCES, os.strerror(errno.EACCES), raw))
 
-    return read_results(raw)</code></pre>
+    return {n: p for n, p in read_results(raw).items() if n != &#39;offset&#39;}</code></pre>
 </details>
 </dd>
 <dt id="pyspectre.core.simulate_netlist"><code class="name flex">
-<span>def <span class="ident">simulate_netlist</span></span>(<span>netlist: str, **kwargs) ‑> dict[str, pandas.core.frame.DataFrame]</span>
+<span>def <span class="ident">simulate_netlist</span></span>(<span>netlist: str, **kwargs) ‑> Dict[str, pandas.core.frame.DataFrame]</span>
 </code></dt>
 <dd>
 <div class="desc"><p>Takes a netlist as text, creates a temporary file and simulates it. The
@@ -497,75 +2419,201 @@ results are read in and all temp files will be destroyed.</p></div>
 <summary>
 <span>Expand source code</span>
 </summary>
-<pre><code class="python">def simulate_netlist(netlist: str, **kwargs) -&gt; dict[str, DataFrame]:
+<pre><code class="python">def simulate_netlist(netlist: str, **kwargs) -&gt; Dict[str, DataFrame]:
     &#34;&#34;&#34;
     Takes a netlist as text, creates a temporary file and simulates it. The
     results are read in and all temp files will be destroyed.
     &#34;&#34;&#34;
     path = netlist_to_tmp(netlist)
-    ret  = simulate(path, **kwargs)
-    _    = os.remove(path)
+    ret = simulate(path, **kwargs)
+    _ = os.remove(path)
     return ret</code></pre>
 </details>
 </dd>
 <dt id="pyspectre.core.start_session"><code class="name flex">
-<span>def <span class="ident">start_session</span></span>(<span>net_path: str, includes: list[str] = None, raw_path: str = None) ‑> <a title="pyspectre.core.Session" href="#pyspectre.core.Session">Session</a></span>
+<span>def <span class="ident">start_session</span></span>(<span>net_path: str, includes: List[str] = None, raw_path: str = None) ‑> <a title="pyspectre.core.Session" href="#pyspectre.core.Session">Session</a></span>
 </code></dt>
 <dd>
-<div class="desc"><p>Start spectre interactive session</p></div>
+<div class="desc"><p>Start a Spectre interactive session.</p>
+<h2 id="parameters">Parameters</h2>
+<dl>
+<dt><strong><code>net_path</code></strong> :&ensp;<code>str</code></dt>
+<dd>The file path to the netlist that will be used in the Spectre session.
+This file must exist and be readable.</dd>
+<dt><strong><code>includes</code></strong> :&ensp;<code>List[str]</code>, optional</dt>
+<dd>A list of directory paths to be included with the <code>-I</code> option in the
+Spectre command. Each path will be expanded if necessary. Defaults to None.</dd>
+<dt><strong><code>raw_path</code></strong> :&ensp;<code>str</code>, optional</dt>
+<dd>The file path where the raw output will be stored. If not provided,
+a temporary raw file path is generated based on the netlist file name.
+Defaults to None.</dd>
+</dl>
+<h2 id="returns">Returns</h2>
+<dl>
+<dt><code><a title="pyspectre.core.Session" href="#pyspectre.core.Session">Session</a></code></dt>
+<dd>An instance of the <code><a title="pyspectre.core.Session" href="#pyspectre.core.Session">Session</a></code> class, representing the active Spectre
+session, which includes the session's configuration and the active
+process handle.</dd>
+</dl>
+<h2 id="raises">Raises</h2>
+<dl>
+<dt><code>FileNotFoundError</code></dt>
+<dd>If the netlist file specified by <code>net_path</code> does not exist.</dd>
+<dt><code>PermissionError</code></dt>
+<dd>If the netlist file specified by <code>net_path</code> is not readable.</dd>
+<dt><code>IOError</code></dt>
+<dd>If the Spectre session fails to start due to an input/output error
+with the command execution.</dd>
+</dl></div>
 <details class="source">
 <summary>
 <span>Expand source code</span>
 </summary>
-<pre><code class="python">def start_session( net_path: str, includes: list[str] = None
-                 , raw_path: str = None ) -&gt; Session:
-    &#34;&#34;&#34;
-    Start spectre interactive session
-    &#34;&#34;&#34;
-    prompt = &#39;\r\n&gt;\s&#39;
-    succ   = &#39;.*\nt&#39;
-    fail   = &#39;.*\nnil&#39;
-    net    = os.path.expanduser(net_path)
-    raw    = raw_path or raw_tmp(net)
-    inc    = [] if not includes else [f&#39;-I{os.path.expanduser(i)}&#39; for i in includes]
-    cmd    = &#39;spectre&#39;
-    args   = [&#39;-64&#39;, &#39;+interactive&#39;, &#39;-format nutbin&#39;, f&#39;-raw {raw}&#39;, &#39;-log&#39;
-             ] + inc + [net]
+<pre><code class="python">def start_session(net_path: str, includes: List[str] = None, raw_path: str = None) -&gt; Session:
+    &#34;&#34;&#34;Start a Spectre interactive session.
 
-    if not os.path.isfile(net):
-        raise(FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT), net))
+    Parameters
+    ----------
+    net_path : str
+        The file path to the netlist that will be used in the Spectre session.
+        This file must exist and be readable.
+    includes : List[str], optional
+        A list of directory paths to be included with the `-I` option in the
+        Spectre command. Each path will be expanded if necessary. Defaults to None.
+    raw_path : str, optional
+        The file path where the raw output will be stored. If not provided,
+        a temporary raw file path is generated based on the netlist file name.
+        Defaults to None.
+
+    Returns
+    -------
+    Session
+        An instance of the `Session` class, representing the active Spectre
+        session, which includes the session&#39;s configuration and the active
+        process handle.
+
+    Raises
+    ------
+    FileNotFoundError
+        If the netlist file specified by `net_path` does not exist.
+
+    PermissionError
+        If the netlist file specified by `net_path` is not readable.
+
+    IOError
+        If the Spectre session fails to start due to an input/output error
+        with the command execution.
+    &#34;&#34;&#34;
+
+    config_dict = get_yaml(&#34;config.yaml&#34;)
+    spectre_args = config_dict[&#39;spectre&#39;][&#39;args&#39;]
+
+    # The command prefex allows for example to run some custom script on the Cadence server before
+    # starting the simulation.
+    command_prefix = config_dict[&#39;spectre&#39;][&#39;command_prefix&#39;]
+    command_postfix = config_dict[&#39;spectre&#39;][&#39;command_postfix&#39;]
+    spectre_executable = config_dict[&#39;spectre&#39;][&#39;executable&#39;]
+
+    offset = 0
+    prompt = r&#39;\r\n&gt;\s&#39;
+    succ = r&#39;.*\nt&#39;
+    fail = r&#39;.*\nnil&#39;
+    net = Path(net_path).expanduser()
+    raw = Path(raw_path) if raw_path else Path(raw_tmp(net))
+    log = log_fifo(raw.with_suffix(&#39;&#39;).as_posix())
+    inc = [f&#39;-I{Path(i).expanduser().as_posix()}&#39; for i in includes] if includes else []
+
+    args = ([spectre_executable] + [net.as_posix()] + inc + [&#39;-raw&#39;, raw.as_posix(), f&#39;=log {log}&#39;]
+            + spectre_args)
+
+    if not net.is_file():
+        raise FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT), net)
     if not os.access(net, os.R_OK):
-        raise(PermissionError(errno.EACCES, os.strerror(errno.EACCES), net))
+        raise PermissionError(errno.EACCES, os.strerror(errno.EACCES), net)
 
-    repl   = pexpect.spawn(cmd, args)
+    command = command_prefix + &#39; &#39;.join(args) + command_postfix
+
+    repl = pexpect.spawn(command, timeout=120)
+    repl.delaybeforesend = 0.001
+    repl.delayafterread = 0.001
 
     if repl.expect(prompt) != 0:
-        raise(IOError(errno.EIO, os.strerror(errno.EIO), cmd))
+        raise IOError(errno.EIO, os.strerror(errno.EIO), command)
 
-    return Session(net_path, raw, repl, prompt, succ, fail)</code></pre>
+    return Session(net_path, raw.as_posix(), repl, prompt, succ, fail, offset)</code></pre>
 </details>
 </dd>
 <dt id="pyspectre.core.stop_session"><code class="name flex">
 <span>def <span class="ident">stop_session</span></span>(<span>session, remove_raw: bool = False) ‑> bool</span>
 </code></dt>
 <dd>
-<div class="desc"><p>Quit spectre interactive session and close terminal</p></div>
+<div class="desc"><p>Quit the Spectre interactive session and close the terminal.</p>
+<p>This function attempts to gracefully quit the Spectre interactive session by sending
+the <code>(sclQuit)</code> command. If Spectre refuses to exit gracefully, it forces termination
+of the session. Optionally, it can also remove the raw output file associated with
+the session.</p>
+<h2 id="parameters">Parameters</h2>
+<dl>
+<dt><strong><code>session</code></strong> :&ensp;<code><a title="pyspectre.core.Session" href="#pyspectre.core.Session">Session</a></code></dt>
+<dd>An instance of the <code><a title="pyspectre.core.Session" href="#pyspectre.core.Session">Session</a></code> class representing the active Spectre session.
+The session contains necessary information, including the raw output file
+and the current offset for reading results.</dd>
+<dt><strong><code>remove_raw</code></strong> :&ensp;<code>bool</code>, optional</dt>
+<dd>If <code>True</code>, the raw output file associated with the session will be deleted
+after the session is stopped. Defaults to <code>False</code>.</dd>
+</dl>
+<h2 id="returns">Returns</h2>
+<dl>
+<dt><code>bool</code></dt>
+<dd><code>True</code> if the session was successfully terminated (whether gracefully or by force),
+<code>False</code> otherwise.</dd>
+</dl>
+<h2 id="warns">Warns</h2>
+<dl>
+<dt><code>RuntimeWarning</code></dt>
+<dd>If the session refuses to exit gracefully and is forcibly terminated.</dd>
+</dl></div>
 <details class="source">
 <summary>
 <span>Expand source code</span>
 </summary>
 <pre><code class="python">def stop_session(session, remove_raw: bool = False) -&gt; bool:
-    &#34;&#34;&#34;
-    Quit spectre interactive session and close terminal
+    &#34;&#34;&#34;Quit the Spectre interactive session and close the terminal.
+
+    This function attempts to gracefully quit the Spectre interactive session by sending
+    the `(sclQuit)` command. If Spectre refuses to exit gracefully, it forces termination
+    of the session. Optionally, it can also remove the raw output file associated with
+    the session.
+
+    Parameters
+    ----------
+    session : Session
+        An instance of the `Session` class representing the active Spectre session.
+        The session contains necessary information, including the raw output file
+        and the current offset for reading results.
+    remove_raw : bool, optional
+        If `True`, the raw output file associated with the session will be deleted
+        after the session is stopped. Defaults to `False`.
+
+    Returns
+    -------
+    bool
+        `True` if the session was successfully terminated (whether gracefully or by force),
+        `False` otherwise.
+
+    Warns
+    -----
+    RuntimeWarning
+        If the session refuses to exit gracefully and is forcibly terminated.
     &#34;&#34;&#34;
     if session.repl.isalive():
         session.repl.sendline(&#39;(sclQuit)&#39;)
         session.repl.wait()
         if session.repl.isalive():
-            warnings.warn( &#39;spectre refused to exit gracefully, forcing ...&#39;
-                         , RuntimeWarning )
-            session.repl.terminate(force = True)
-    if remove_raw:
+            warnings.warn(
+                &#39;spectre refused to exit gracefully, forcing ...&#39;, RuntimeWarning)
+            session.repl.terminate(force=True)
+    if remove_raw and os.path.isfile(session.raw_file):
         os.remove(session.raw_file)
     return not session.repl.isalive()</code></pre>
 </details>
@@ -577,39 +2625,108 @@ results are read in and all temp files will be destroyed.</p></div>
 <dl>
 <dt id="pyspectre.core.Session"><code class="flex name class">
 <span>class <span class="ident">Session</span></span>
-<span>(</span><span>net_file: str, raw_file: str, repl: REPL, prompt: str, succ: str, fail: str)</span>
+<span>(</span><span>net_file: str, raw_file: str, repl: REPL, prompt: str, succ: str, fail: str, offset: int)</span>
 </code></dt>
 <dd>
-<div class="desc"><p>Session(net_file, raw_file, repl, prompt, succ, fail)</p></div>
-<h3>Ancestors</h3>
-<ul class="hlist">
-<li>builtins.tuple</li>
-</ul>
-<h3>Instance variables</h3>
+<div class="desc"><p>Represents an interactive Spectre session.</p>
+<p>This class encapsulates the state and relevant information for an active
+Spectre session. It includes details about the netlist and raw output files,
+the instance managing the interaction with Spectre,
+and the prompts and patterns used for command success and failure detection.</p>
+<h2 id="attributes">Attributes</h2>
+<dl>
+<dt><strong><code>net_file</code></strong> :&ensp;<code>str</code></dt>
+<dd>The path to the netlist file used in the Spectre session.</dd>
+<dt><strong><code>raw_file</code></strong> :&ensp;<code>str</code></dt>
+<dd>The path to the raw output file generated by the Spectre session.</dd>
+<dt><strong><code>repl</code></strong> :&ensp;<code>REPL</code></dt>
+<dd>An instance of the <code>REPL</code> class that handles the interactive communication
+with the Spectre process. This includes sending commands and receiving output.</dd>
+<dt><strong><code>prompt</code></strong> :&ensp;<code>str</code></dt>
+<dd>The expected prompt string used to detect when the Spectre process is ready
+to accept the next command.</dd>
+<dt><strong><code>succ</code></strong> :&ensp;<code>str</code></dt>
+<dd>The regular expression pattern used to identify successful command execution
+in the Spectre session.</dd>
+<dt><strong><code>fail</code></strong> :&ensp;<code>str</code></dt>
+<dd>The regular expression pattern used to identify failed command execution
+in the Spectre session.</dd>
+<dt><strong><code>offset</code></strong> :&ensp;<code>int</code></dt>
+<dd>The current offset used for reading results from the raw output file. This
+helps track the position in the file for incremental reads after each analysis.</dd>
+</dl></div>
+<details class="source">
+<summary>
+<span>Expand source code</span>
+</summary>
+<pre><code class="python">@dataclass
+class Session:
+    &#34;&#34;&#34;Represents an interactive Spectre session.
+
+    This class encapsulates the state and relevant information for an active
+    Spectre session. It includes details about the netlist and raw output files,
+    the instance managing the interaction with Spectre,
+    and the prompts and patterns used for command success and failure detection.
+
+    Attributes
+    ----------
+    net_file : str
+        The path to the netlist file used in the Spectre session.
+    raw_file : str
+        The path to the raw output file generated by the Spectre session.
+    repl : REPL
+        An instance of the `REPL` class that handles the interactive communication
+        with the Spectre process. This includes sending commands and receiving output.
+    prompt : str
+        The expected prompt string used to detect when the Spectre process is ready
+        to accept the next command.
+    succ : str
+        The regular expression pattern used to identify successful command execution
+        in the Spectre session.
+    fail : str
+        The regular expression pattern used to identify failed command execution
+        in the Spectre session.
+    offset : int
+        The current offset used for reading results from the raw output file. This
+        helps track the position in the file for incremental reads after each analysis.
+    &#34;&#34;&#34;
+    net_file: str
+    raw_file: str
+    repl: REPL
+    prompt: str
+    succ: str
+    fail: str
+    offset: int</code></pre>
+</details>
+<h3>Class variables</h3>
 <dl>
 <dt id="pyspectre.core.Session.fail"><code class="name">var <span class="ident">fail</span> : str</code></dt>
 <dd>
-<div class="desc"><p>Alias for field number 5</p></div>
+<div class="desc"></div>
 </dd>
 <dt id="pyspectre.core.Session.net_file"><code class="name">var <span class="ident">net_file</span> : str</code></dt>
 <dd>
-<div class="desc"><p>Alias for field number 0</p></div>
+<div class="desc"></div>
+</dd>
+<dt id="pyspectre.core.Session.offset"><code class="name">var <span class="ident">offset</span> : int</code></dt>
+<dd>
+<div class="desc"></div>
 </dd>
 <dt id="pyspectre.core.Session.prompt"><code class="name">var <span class="ident">prompt</span> : str</code></dt>
 <dd>
-<div class="desc"><p>Alias for field number 3</p></div>
+<div class="desc"></div>
 </dd>
 <dt id="pyspectre.core.Session.raw_file"><code class="name">var <span class="ident">raw_file</span> : str</code></dt>
 <dd>
-<div class="desc"><p>Alias for field number 1</p></div>
+<div class="desc"></div>
 </dd>
 <dt id="pyspectre.core.Session.repl"><code class="name">var <span class="ident">repl</span> : REPL</code></dt>
 <dd>
-<div class="desc"><p>Alias for field number 2</p></div>
+<div class="desc"></div>
 </dd>
 <dt id="pyspectre.core.Session.succ"><code class="name">var <span class="ident">succ</span> : str</code></dt>
 <dd>
-<div class="desc"><p>Alias for field number 4</p></div>
+<div class="desc"></div>
 </dd>
 </dl>
 </dd>
@@ -628,16 +2745,31 @@ results are read in and all temp files will be destroyed.</p></div>
 </ul>
 </li>
 <li><h3><a href="#header-functions">Functions</a></h3>
-<ul class="two-column">
-<li><code><a title="pyspectre.core.get_analyses" href="#pyspectre.core.get_analyses">get_analyses</a></code></li>
+<ul class="">
+<li><code><a title="pyspectre.core.create_analysis" href="#pyspectre.core.create_analysis">create_analysis</a></code></li>
+<li><code><a title="pyspectre.core.get_analysis_parameter" href="#pyspectre.core.get_analysis_parameter">get_analysis_parameter</a></code></li>
+<li><code><a title="pyspectre.core.get_circuit_parameter" href="#pyspectre.core.get_circuit_parameter">get_circuit_parameter</a></code></li>
+<li><code><a title="pyspectre.core.get_instance_parameter" href="#pyspectre.core.get_instance_parameter">get_instance_parameter</a></code></li>
 <li><code><a title="pyspectre.core.get_parameter" href="#pyspectre.core.get_parameter">get_parameter</a></code></li>
 <li><code><a title="pyspectre.core.get_parameters" href="#pyspectre.core.get_parameters">get_parameters</a></code></li>
+<li><code><a title="pyspectre.core.get_yaml" href="#pyspectre.core.get_yaml">get_yaml</a></code></li>
+<li><code><a title="pyspectre.core.list_analyses" href="#pyspectre.core.list_analyses">list_analyses</a></code></li>
+<li><code><a title="pyspectre.core.list_analysis_parameters" href="#pyspectre.core.list_analysis_parameters">list_analysis_parameters</a></code></li>
+<li><code><a title="pyspectre.core.list_analysis_types" href="#pyspectre.core.list_analysis_types">list_analysis_types</a></code></li>
+<li><code><a title="pyspectre.core.list_circuit_parameters" href="#pyspectre.core.list_circuit_parameters">list_circuit_parameters</a></code></li>
+<li><code><a title="pyspectre.core.list_instance_parameters" href="#pyspectre.core.list_instance_parameters">list_instance_parameters</a></code></li>
+<li><code><a title="pyspectre.core.list_instances" href="#pyspectre.core.list_instances">list_instances</a></code></li>
+<li><code><a title="pyspectre.core.list_nets" href="#pyspectre.core.list_nets">list_nets</a></code></li>
+<li><code><a title="pyspectre.core.log_fifo" href="#pyspectre.core.log_fifo">log_fifo</a></code></li>
 <li><code><a title="pyspectre.core.netlist_to_tmp" href="#pyspectre.core.netlist_to_tmp">netlist_to_tmp</a></code></li>
 <li><code><a title="pyspectre.core.raw_tmp" href="#pyspectre.core.raw_tmp">raw_tmp</a></code></li>
 <li><code><a title="pyspectre.core.read_results" href="#pyspectre.core.read_results">read_results</a></code></li>
 <li><code><a title="pyspectre.core.run_all" href="#pyspectre.core.run_all">run_all</a></code></li>
 <li><code><a title="pyspectre.core.run_analysis" href="#pyspectre.core.run_analysis">run_analysis</a></code></li>
 <li><code><a title="pyspectre.core.run_command" href="#pyspectre.core.run_command">run_command</a></code></li>
+<li><code><a title="pyspectre.core.set_analysis_parameter" href="#pyspectre.core.set_analysis_parameter">set_analysis_parameter</a></code></li>
+<li><code><a title="pyspectre.core.set_circuit_parameter" href="#pyspectre.core.set_circuit_parameter">set_circuit_parameter</a></code></li>
+<li><code><a title="pyspectre.core.set_instance_parameter" href="#pyspectre.core.set_instance_parameter">set_instance_parameter</a></code></li>
 <li><code><a title="pyspectre.core.set_parameter" href="#pyspectre.core.set_parameter">set_parameter</a></code></li>
 <li><code><a title="pyspectre.core.set_parameters" href="#pyspectre.core.set_parameters">set_parameters</a></code></li>
 <li><code><a title="pyspectre.core.simulate" href="#pyspectre.core.simulate">simulate</a></code></li>
@@ -653,6 +2785,7 @@ results are read in and all temp files will be destroyed.</p></div>
 <ul class="two-column">
 <li><code><a title="pyspectre.core.Session.fail" href="#pyspectre.core.Session.fail">fail</a></code></li>
 <li><code><a title="pyspectre.core.Session.net_file" href="#pyspectre.core.Session.net_file">net_file</a></code></li>
+<li><code><a title="pyspectre.core.Session.offset" href="#pyspectre.core.Session.offset">offset</a></code></li>
 <li><code><a title="pyspectre.core.Session.prompt" href="#pyspectre.core.Session.prompt">prompt</a></code></li>
 <li><code><a title="pyspectre.core.Session.raw_file" href="#pyspectre.core.Session.raw_file">raw_file</a></code></li>
 <li><code><a title="pyspectre.core.Session.repl" href="#pyspectre.core.Session.repl">repl</a></code></li>
