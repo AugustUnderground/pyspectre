@@ -9,7 +9,7 @@ with open('requirements.txt', 'r') as req:
     requirements = req.read().splitlines()
 
 setup( name                          = package_name
-     , version                       = '0.0.2'
+     , version                       = '0.0.3'
      , author                        = 'Yannick Uhlmann'
      , author_email                  = 'augustunderground@pm.me'
      , description                   = 'Spectre interface for python'

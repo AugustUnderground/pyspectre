@@ -8,7 +8,7 @@ from subprocess import run, DEVNULL, Popen
 from tempfile import NamedTemporaryFile
 import errno
 import warnings
-from typing import NamedTuple, NewType, List, Dict, Iterable
+from typing import NamedTuple, NewType, List, Dict, Iterable, Union
 
 from dataclasses import dataclass
 import pexpect
@@ -189,8 +189,26 @@ def get_yaml(file_name: str) -> dict:
     with config_path.open('r') as file:
         return yaml.safe_load(file)
 
+def setup_command(path: str):
+    pre  = ''
+    exe  = 'spectre'
+    args = ['-64', '-format nutbin', '+interactive']
+    post = ''
+    if path:
+        try:
+            cfg  = get_yaml(path)
+            args = cfg['spectre']['args']
+            pre  = cfg['spectre']['command_prefix']
+            post = cfg['spectre']['command_postfix']
+            exe  = cfg['spectre']['executable']
+        except FileNotFoundError:
+            pass
+    return pre,exe,args,post
 
-def start_session(net_path: str, includes: List[str] = None, raw_path: str = None) -> Session:
+def start_session( net_path: str, includes: Union[list[str],None] = None
+                 , raw_path: Union[str,None] = None
+                 , config_path: str = ''
+                 ) -> Session:
     """Start a Spectre interactive session.
 
     Parameters
@@ -205,7 +223,9 @@ def start_session(net_path: str, includes: List[str] = None, raw_path: str = Non
         The file path where the raw output will be stored. If not provided,
         a temporary raw file path is generated based on the netlist file name.
         Defaults to None.
-
+    config_path : str, optional
+        Path to a yaml file that configures the spectre executable. See
+        `config.yaml` as example.
     Returns
     -------
     Session
@@ -226,15 +246,6 @@ def start_session(net_path: str, includes: List[str] = None, raw_path: str = Non
         with the command execution.
     """
 
-    config_dict = get_yaml("config.yaml")
-    spectre_args = config_dict['spectre']['args']
-
-    # The command prefex allows for example to run some custom script on the Cadence server before
-    # starting the simulation.
-    command_prefix = config_dict['spectre']['command_prefix']
-    command_postfix = config_dict['spectre']['command_postfix']
-    spectre_executable = config_dict['spectre']['executable']
-
     offset = 0
     prompt = r'\r\n>\s'
     succ = r'.*\nt'
@@ -244,8 +255,12 @@ def start_session(net_path: str, includes: List[str] = None, raw_path: str = Non
     log = log_fifo(raw.with_suffix('').as_posix())
     inc = [f'-I{Path(i).expanduser().as_posix()}' for i in includes] if includes else []
 
-    args = ([spectre_executable] + [net.as_posix()] + inc + ['-raw', raw.as_posix(), f'=log {log}']
-            + spectre_args)
+    command_prefix,spectre_executable,spectre_args,command_postfix \
+            = setup_command(config_path)
+
+    args = ( [spectre_executable] + [net.as_posix()]
+           + inc + ['-raw', raw.as_posix(), f'=log {log}']
+           + spectre_args )
 
     if not net.is_file():
         raise FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT), net)
@@ -262,7 +277,6 @@ def start_session(net_path: str, includes: List[str] = None, raw_path: str = Non
         raise IOError(errno.EIO, os.strerror(errno.EIO), command)
 
     return Session(net_path, raw.as_posix(), repl, prompt, succ, fail, offset)
-
 
 def run_command(session: Session, command: str) -> bool:
     """Execute an arbitrary SCL command within an active Spectre session.
