@@ -1,0 +1,23 @@
+# This CITATION.cff file was generated with cffinit.
+# Visit https://bit.ly/cffinit to generate yours today!
+
+cff-version: 1.2.0
+title: PySpectre
+message: >-
+  If you use this software, please cite it using the
+  metadata from this file.
+type: software
+authors:
+  - given-names: Yannick
+    family-names: Uhlmann
+    email: augustunderground@pm.me
+    affiliation: Electronics & Drives
+    orcid: 'https://orcid.org/0000-0001-6704-9640'
+repository-code: 'https://github.com/AugustUnderground/pyspectre'
+url: 'https://augustunderground.github.io/pyspectre/'
+abstract: ' Python interface for Cadence Spectre.'
+keywords:
+  - EDA
+  - Python
+  - Spectre
+license: MIT
