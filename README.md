@@ -30,7 +30,8 @@ results  = ps.simulate(netlist, includes)
 Start an interactive session:
 
 ```python
-import pyspectre as ps
+from pyspectre import SpectreInterface
+ps = SpectreInterface()
 
 netlist  = 'path/to/netlist.scs'
 includes = ['path/to/pdk/libs']
@@ -39,19 +40,19 @@ includes = ['path/to/pdk/libs']
 session  = ps.start_session(netlist, includes)
 
 # Retrieve simulation analyses defined in the netlist
-analyses = ps.get_analyses(session)
+analyses = ps.get_analyses()
 
 # Get values for parameters defined in the netlist
-params   = ps.get_parameters(session, ['Wcm2', 'Ld'])
+params   = ps.get_parameters(['Wcm2', 'Ld'])
 
 # Set netlist parameters
-ps.set_parameters(session, {'Wcm2': 2.0e-6, 'Ld': 1.0e-6})
+ps.set_parameters({'Wcm2': 2.0e-6, 'Ld': 1.0e-6})
 
 # Simulate
-results  = ps.run_all(session)
+results  = ps.run_all()
 
 # End Interactive session
-ps.stop_session(session)
+ps.stop_session()
 ```
 
 Check `./test/example.py` and `./notebooks/introduction.ipynb` for more.
