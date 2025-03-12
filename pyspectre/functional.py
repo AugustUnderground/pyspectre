@@ -206,7 +206,10 @@ def simulate_netlist(netlist: str, **kwargs) -> Dict[str, DataFrame]:
     return ret
 
 
-REPL = NewType('REPL', pexpect.spawn)
+if os.name == "nt":
+    REPL = NewType('REPL', type(None))
+else:
+    REPL = NewType('REPL', pexpect.spawn)
 
 
 @dataclass

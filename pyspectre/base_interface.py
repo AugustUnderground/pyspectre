@@ -1,14 +1,7 @@
-import pexpect
-import os
 from abc import ABC, abstractmethod
-from typing import Dict, Union, Iterable, NewType, List, Optional
+from typing import Dict, Union, Iterable, List, Optional
 from pandas import DataFrame
 from pyspectre.functional import Session
-
-if os.name == "nt":
-    REPL = NewType('REPL', type(None))
-else:
-    REPL = NewType('REPL', pexpect.spawn)
 
 
 class BaseSpectreInterface(ABC):
@@ -157,18 +150,6 @@ class BaseSpectreInterface(ABC):
         Dict[str, DataFrame]
             A dictionary where the keys are the names of the analysis results, and the
             values are pandas DataFrames containing the data from each result.
-        """
-        pass
-
-    @abstractmethod
-    def run_all_analyses(self) -> Dict[str, DataFrame]:
-        """Run all simulation analyses in the Spectre session and retrieve the results.
-
-        Returns
-        -------
-        Dict[str, DataFrame]
-            A dictionary where the keys are the names of the analyses, and the values
-            are pandas DataFrames containing the results of each analysis.
         """
         pass
 

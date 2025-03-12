@@ -19,14 +19,12 @@ class DummySpectreInterface(BaseSpectreInterface):
         when start_session is invoked.
     """
 
-    def __init__(self):
-        self.session = None
-
-    def start_session(self, net_path: str, includes: Union[List[str], None] = None,
-                      raw_path: Union[str, None] = None, config_path: str = '') -> Session:
-        self.session = Session(net_file=net_path, raw_file=raw_path or "dummy.raw", repl=None,
+    def start_session(self, net_path: str, includes: Union[list[str], None] = None,
+                      raw_path: Union[str, None] = None, config_path: str = '',
+                      aps_setting: Union[str, None] = None,
+                      x_setting: Union[str, None] = None) -> None:
+        self.session = Session(net_file="", raw_file=raw_path or "dummy.raw", repl=None,
                                prompt=None, succ=None, fail=None, offset=None)
-        return self.session
 
     def stop_session(self, remove_raw: bool = False) -> bool:
         self.session = None
@@ -59,6 +57,9 @@ class DummySpectreInterface(BaseSpectreInterface):
         return {param: random.random() for param in params}
 
     def list_analyses(self) -> List[str]:
+        return ["ac", "dc", "tran", "noise"]
+
+    def list_analysis_types(self) -> list[tuple[str, str]]:
         return ["ac", "dc", "tran", "noise"]
 
     def list_analysis_parameters(self, analysis_name: str) -> List[str]:
