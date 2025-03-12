@@ -7,4 +7,4 @@ spectre:
   init_script_path: ""
   command_prefix: ""
   command_postfix: ""
-  temporary_simulations_dir: "/tmp/simulation/p.romero/temporary_simulations"
+  temporary_simulations_dir: ""
