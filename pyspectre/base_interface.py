@@ -1,7 +1,9 @@
 from abc import ABC, abstractmethod
 from typing import Dict, Union, Iterable, List, Optional
+from typing_extensions import Literal
 from pandas import DataFrame
 from pyspectre.functional import Session
+from pathlib import Path
 
 
 class BaseSpectreInterface(ABC):
@@ -17,10 +19,10 @@ class BaseSpectreInterface(ABC):
         The session contains necessary information, including the raw output file
         and the current offset for reading results.
     """
-    session: Session = None
+    session: Session
 
     @abstractmethod
-    def start_session(self, net_path: str, includes: Union[list[str], None] = None,
+    def start_session(self, net_path: Union[str, Path], includes: Union[list[str], None] = None,
                       raw_path: Union[str, None] = None, config_path: str = '',
                       aps_setting: Union[str, None] = None,
                       x_setting: Union[str, None] = None) -> None:
@@ -28,7 +30,7 @@ class BaseSpectreInterface(ABC):
 
         Parameters
         ----------
-        net_path : str
+        net_path : Union[str, Path]
             The file path to the netlist that will be used in the Spectre session.
             This file must exist and be readable.
         includes : List[str], optional
@@ -95,7 +97,7 @@ class BaseSpectreInterface(ABC):
         """
         pass
 
-    def __init__(self, net_path: str, includes: Optional[List[str]] = None,
+    def __init__(self, net_path: Union[str, Path], includes: Optional[List[str]] = None,
                  raw_path: Optional[str] = None, config_path: str = '',
                  aps_setting: Optional[str] = None, x_setting: Optional[str] = None):
         """Initialize the SpectreInterface with parameters necessary for starting a session."""
@@ -121,15 +123,17 @@ class BaseSpectreInterface(ABC):
         )
         return self
 
-    def __exit__(self, exc_type, exc_value, traceback) -> bool:
+    def __exit__(self, exc_type, exc_value, traceback) -> Literal[False]:
         """Exit the runtime context and stop the Spectre session.
 
         Parameters
         ----------
-            exc_type, exc_value, traceback: Exception details if one occurred.
+        exc_type, exc_value, traceback:
+            Exception details if one occurred.
 
         Returns
         -------
+        Literal[False]
             False so that any exception is propagated.
         """
         self.stop_session(remove_raw=False)
@@ -245,24 +249,6 @@ class BaseSpectreInterface(ABC):
         pass
 
     @abstractmethod
-    def list_analysis_types(self) -> list[tuple[str, str]]:
-        """Retrieve all available analysis types in the current Spectre session.
-
-        This function sends a command to the Spectre session to retrieve detailed
-        information about a specific analysis type (in this case, "ac"). It then parses
-        the command output to extract and return a list of analysis types and their
-        descriptions.
-
-        Returns
-        -------
-        list[tuple[str, str]]
-            A list of tuples, where each tuple contains:
-            - The name of the analysis type as the first element (str).
-            - A description about the analysis type as the second element (str).
-        """
-        pass
-
-    @abstractmethod
     def list_instances(self) -> list[str]:
         """Retrieve a list of all components inthe circuit.
 
@@ -290,22 +276,6 @@ class BaseSpectreInterface(ABC):
         list[str]
             A list of strings where each string is the name of a net available
             in the current Spectre session.
-        """
-        pass
-
-    @abstractmethod
-    def list_circuit_parameters(self) -> list[str]:
-        """Retrieve a list of all circuit parameters in the current Spectre session.
-
-        This function sends a command to the Spectre session to list all available
-        circuit parameters. It then parses the command output and returns a list
-        of parameter names.
-
-        Returns
-        -------
-        list[str]
-            A list of strings where each string is the name of a circuit parameter
-            available in the current Spectre session.
         """
         pass
 

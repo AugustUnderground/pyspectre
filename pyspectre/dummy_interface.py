@@ -1,7 +1,8 @@
 import random
 from typing import List, Dict, Union, Iterable
 from pandas import DataFrame
-from .base_interface import BaseSpectreInterface, Session
+from .base_interface import BaseSpectreInterface
+from pathlib import Path
 
 
 class DummySpectreInterface(BaseSpectreInterface):
@@ -11,23 +12,14 @@ class DummySpectreInterface(BaseSpectreInterface):
     and development purposes. Instead of launching an actual Cadence Spectre session,
     it simulates the behavior by creating a dummy Session object. This allows developers
     to test integration and code flow without requiring the full Spectre environment.
-
-    Attributes
-    ----------
-    session : Session
-        The simulated session object. Initially set to None and later instantiated
-        when start_session is invoked.
     """
-
-    def start_session(self, net_path: str, includes: Union[list[str], None] = None,
+    def start_session(self, net_path: Union[str, Path], includes: Union[list[str], None] = None,
                       raw_path: Union[str, None] = None, config_path: str = '',
                       aps_setting: Union[str, None] = None,
                       x_setting: Union[str, None] = None) -> None:
-        self.session = Session(net_file="", raw_file=raw_path or "dummy.raw", repl=None,
-                               prompt=None, succ=None, fail=None, offset=None)
+        pass
 
     def stop_session(self, remove_raw: bool = False) -> bool:
-        self.session = None
         return True
 
     def run_simulation(self) -> Dict[str, DataFrame]:
@@ -59,9 +51,6 @@ class DummySpectreInterface(BaseSpectreInterface):
     def list_analyses(self) -> List[str]:
         return ["ac", "dc", "tran", "noise"]
 
-    def list_analysis_types(self) -> list[tuple[str, str]]:
-        return ["ac", "dc", "tran", "noise"]
-
     def list_analysis_parameters(self, analysis_name: str) -> List[str]:
         return ["start", "stop", "step", "accuracy"]
 
@@ -81,9 +70,6 @@ class DummySpectreInterface(BaseSpectreInterface):
 
     def list_instances(self) -> List[str]:
         return ["instance1", "instance2", "instance3"]
-
-    def list_circuit_parameters(self) -> List[str]:
-        return ["param1", "param2", "param3"]
 
     def get_circuit_parameter(self, circuit_parameter: str) -> List[tuple[str, str]]:
         return [("attr1", "value1"), ("attr2", "value2")]

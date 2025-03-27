@@ -1,7 +1,8 @@
-from typing import Dict, Union
+from typing import Dict, Union, Iterable
 from pandas import DataFrame
-from .base_interface import BaseSpectreInterface
+from .base_interface import BaseSpectreInterface, Session
 import pyspectre.functional as ps
+from pathlib import Path
 
 
 class SpectreInterface(BaseSpectreInterface):
@@ -20,8 +21,9 @@ class SpectreInterface(BaseSpectreInterface):
         The simulated session object. Initially set to None and later instantiated
         when start_session is invoked.
     """
+    session: Session
 
-    def start_session(self, net_path: str, includes: Union[list[str], None] = None,
+    def start_session(self, net_path: Union[str, Path], includes: Union[list[str], None] = None,
                       raw_path: Union[str, None] = None, config_path: str = '',
                       aps_setting: Union[str, None] = None,
                       x_setting: Union[str, None] = None):
@@ -36,6 +38,12 @@ class SpectreInterface(BaseSpectreInterface):
 
     def run_all(self) -> Dict[str, DataFrame]:
         return ps.run_all(self.session)
+
+    def get_parameters(self, params: Iterable[str]) -> Dict[str, float]:
+        return ps.get_parameters(self.session, params)
+
+    def set_parameters(self, params: Dict[str, float]) -> bool:
+        return ps.set_parameters(self.session, params)
 
     def run_analysis(self, analysis: str) -> Dict[str, DataFrame]:
         return ps.run_analysis(self.session, analysis)
@@ -52,17 +60,11 @@ class SpectreInterface(BaseSpectreInterface):
     def list_analyses(self) -> list[str]:
         return ps.list_analyses(self.session)
 
-    def list_analysis_types(self) -> list[tuple[str, str]]:
-        return ps.list_analysis_types(self.session)
-
     def list_instances(self) -> list[str]:
         return ps.list_instances(self.session)
 
     def list_nets(self) -> list[str]:
         return ps.list_nets(self.session)
-
-    def list_circuit_parameters(self) -> list[str]:
-        return ps.list_circuit_parameters(self.session)
 
     def list_analysis_parameters(self, analysis_name: str) -> list[str]:
         return ps.list_analysis_parameters(self.session, analysis_name)
