@@ -8,18 +8,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ---
 
-## [0.0.4] - 2025-02-25
+## [0.1.0] - 2025-05-12
 ### Added
-- Added module `base_interface.py` as abstract definition of the Python-Spectre interface. Added the Session type to the interface to manage Spectre sessions. This simplifies the PySpectre API and allows object-oriented programming.
-- Added module `dummy_interface.py` to implement a dummy interface for software testing without needing Cadence Spectre.
-- Added module `spectre_interface` to implement the real interface to Cadence Spectre.
+- Added `base_interface.py` module as an abstract definition of the Python-Spectre interface.
+- Introduced the `Session` type to the interface to manage Spectre sessions, simplifying the PySpectre API and enabling object-oriented programming while maintaining the functional interface.
+- Added `dummy_interface.py` to implement a dummy interface for software testing, eliminating the need for Cadence Spectre.
+- Added `spectre_interface.py` to implement the actual interface to Cadence Spectre.
 
 ### Changed
-- Changed location of `config.yaml` to repository top level directory.
+- Moved `config.yaml` to the repository’s top-level directory.
+- Added error handling, comments, and print statements to `example_1.py` and `example_2.py`.
+- Renamed `core.py` to `functional.py`.
 
-### Removed
-- Removed `__main__.py` module 
-- Removed `core.py` module
+### Fixed
+- Replaced single quotes with double quotes for consistency.
+- Improved type handling and annotations using the `mypy` type checker.
+
 
 ---
 

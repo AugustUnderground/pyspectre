@@ -10,7 +10,7 @@ with open('requirements.txt', 'r') as req:
 
 setup(
     name=package_name,
-    version='0.0.4',
+    version='0.1.0',
     author='Yannick Uhlmann',
     author_email='augustunderground@pm.me',
     description='Spectre Interface for Python',
