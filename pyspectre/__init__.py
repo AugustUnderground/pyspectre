@@ -1,3 +1,5 @@
 """ Python interface for Cadence Spectre """
 
-from .core import *
+from .spectre_interface import SpectreInterface
+from .dummy_interface import DummySpectreInterface
+from . import functional

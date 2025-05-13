@@ -19,7 +19,7 @@ $ pip install git+https://github.com/augustunderground/pyspectre.git
 Simulate a netlist and retrieve simulation results:
 
 ```python
-import pyspectre as ps
+import pyspectre.functional as ps
 
 netlist  = 'path/to/netlist.scs'
 includes = ['path/to/pdk/libs']
@@ -30,7 +30,7 @@ results  = ps.simulate(netlist, includes)
 Start an interactive session:
 
 ```python
-import pyspectre as ps
+import pyspectre.functional as ps
 
 netlist  = 'path/to/netlist.scs'
 includes = ['path/to/pdk/libs']

@@ -8,7 +8,7 @@ from subprocess import run, DEVNULL, Popen
 from tempfile import NamedTemporaryFile
 import errno
 import warnings
-from typing import NamedTuple, NewType, List, Dict, Iterable, Union
+from typing import NewType, List, Dict, Iterable, Union, Optional
 
 from dataclasses import dataclass
 import pexpect
@@ -17,8 +17,17 @@ from pynut import read_raw, plot_dict
 
 
 def netlist_to_tmp(netlist: str) -> str:
-    """
-    Write a netlist to a temporary file
+    """Write a netlist to a temporary file
+
+    Parameters
+    ----------
+    net_path : str
+        The path to the netlist file.
+
+    Returns
+    -------
+    str
+        The full path to the created file.
     """
     tmp = NamedTemporaryFile(mode='w', suffix='.scs', delete=False)
     path = tmp.name
@@ -27,9 +36,22 @@ def netlist_to_tmp(netlist: str) -> str:
     return path
 
 
-def raw_tmp(net_path: str) -> str:
-    """
-    Raw simulation results in /tmp
+def raw_tmp(net_path: Union[str, Path]) -> str:
+    """Generate a temporary file path for raw simulation results.
+
+    This function creates a temporary file in the default temporary directory
+    with a `.raw` suffix, based on the name of the provided netlist file.
+
+    Parameters
+    ----------
+    net_path : Union[str, Path]
+        The path to the netlist file. The basename of this file is used
+        as the prefix for the temporary raw file.
+
+    Returns
+    -------
+    str
+        The full path to the created temporary `.raw` file.
     """
     pre = f'{os.path.splitext(os.path.basename(net_path))[0]}'
     suf = '.raw'
@@ -40,8 +62,22 @@ def raw_tmp(net_path: str) -> str:
 
 
 def log_fifo(log_path: str) -> str:
-    """
-    Create fifo buffer for spectre log file
+    """Create a FIFO buffer for a Spectre log file.
+
+    This function creates a named pipe (FIFO) at the specified path with a `.log`
+    extension. It starts a background process that discards data written to the
+    FIFO to prevent blocking during logging.
+
+    Parameters
+    ----------
+    log_path : str
+        The base path for the log file. The `.log` extension will be appended
+        to this path to create the FIFO buffer.
+
+    Returns
+    -------
+    str
+        The full path to the created FIFO buffer.
     """
     path = f'{log_path}.log'
     mode = 0o600
@@ -50,9 +86,59 @@ def log_fifo(log_path: str) -> str:
     return path
 
 
-def read_results(raw_file: str, offset: int = 0) -> Dict[str, DataFrame]:
+def get_yaml(file_name: str) -> Dict:
+    """Load and return a YAML file.
+
+    Parameters
+    ----------
+    file_name : str
+        The name of the YAML file
+
+    Returns
+    -------
+    dict
+        A dictionary containing the configuration data loaded from the YAML file.
+
+    Raises
+    ------
+    FileNotFoundError
+        If the specified configuration file does not exist.
     """
-    Read simulation results
+    config_path = Path(__file__).parent / file_name
+
+    if not config_path.exists():
+        raise FileNotFoundError(f"Configuration file not found: {config_path}")
+
+    with config_path.open('r') as file:
+        return yaml.safe_load(file)
+
+
+def read_results(raw_file: str, offset: int = 0) -> Dict[str, DataFrame]:
+    """Read simulation results from a raw file.
+
+    This function reads simulation results from a specified raw data file and
+    returns the results in a structured format. It validates the file's existence
+    and readability before processing.
+
+    Parameters
+    ----------
+    raw_file : str
+        The path to the raw simulation results file.
+    offset : int, optional
+        An offset value to use when reading the raw data (default is 0).
+
+    Returns
+    -------
+    Dict[str, DataFrame]
+        A dictionary where keys are simulation result labels and values are
+        corresponding pandas DataFrames containing the data.
+
+    Raises
+    ------
+    FileNotFoundError
+        If the specified raw file does not exist.
+    PermissionError
+        If the specified raw file is not readable.
     """
     if not os.path.isfile(raw_file):
         raise (FileNotFoundError(errno.ENOENT,
@@ -63,8 +149,8 @@ def read_results(raw_file: str, offset: int = 0) -> Dict[str, DataFrame]:
     return plot_dict(read_raw(raw_file, off_set=offset))
 
 
-def simulate(netlist_path: str, includes: List[str] = None, raw_path: str = None,
-             log_path: str = None, log_silent=True) -> Dict[str, DataFrame]:
+def simulate(netlist_path: str, includes: Optional[List[str]] = [], raw_path: str = "",
+             log_path: str = "", log_silent=True) -> Dict[str, DataFrame]:
     """
     Passes the given netlist path to spectre and reads the results in.
     """
@@ -116,7 +202,7 @@ def simulate_netlist(netlist: str, **kwargs) -> Dict[str, DataFrame]:
     """
     path = netlist_to_tmp(netlist)
     ret = simulate(path, **kwargs)
-    _ = os.remove(path)
+    os.remove(path)
     return ret
 
 
@@ -134,7 +220,7 @@ class Session:
 
     Attributes
     ----------
-    net_file : str
+    net_file : Union[str, Path]
         The path to the netlist file used in the Spectre session.
     raw_file : str
         The path to the raw output file generated by the Spectre session.
@@ -154,66 +240,63 @@ class Session:
         The current offset used for reading results from the raw output file. This
         helps track the position in the file for incremental reads after each analysis.
     """
-    net_file: str
+    net_file: Union[str, Path]
     raw_file: str
-    repl: REPL
+    repl: pexpect.spawn
     prompt: str
     succ: str
     fail: str
     offset: int
 
 
-def get_yaml(file_name: str) -> dict:
-    """Load and return a YAML file.
+def setup_command(path: str):
+    """Set up the Spectre command with optional configuration.
+
+    This function constructs the command components for running the Spectre
+    simulator. If a configuration file is provided, it customizes the command
+    based on the file's content. Defaults are used if the configuration file
+    is not found or invalid.
 
     Parameters
     ----------
-    file_name : str
-        The name of the YAML file
+    path : str
+        Path to the YAML configuration file. If the file is not found or
+        invalid, default command components are used.
 
     Returns
     -------
-    dict
-        A dictionary containing the configuration data loaded from the YAML file.
-
-    Raises
-    ------
-    FileNotFoundError
-        If the specified configuration file does not exist.
+    tuple
+        A tuple containing four components:
+        - pre (str): Command prefix (default is an empty string).
+        - exe (str): Spectre executable name (default is `'spectre'`).
+        - args (list of str): List of command-line arguments (default is
+          `['-64', '-format nutbin', '+interactive']`).
+        - post (str): Command postfix (default is an empty string).
     """
-    config_path = Path(__file__).parent / file_name
-
-    if not config_path.exists():
-        raise FileNotFoundError(f"Configuration file not found: {config_path}")
-
-    with config_path.open('r') as file:
-        return yaml.safe_load(file)
-
-def setup_command(path: str):
-    pre  = ''
-    exe  = 'spectre'
+    pre = ''
+    exe = 'spectre'
     args = ['-64', '-format nutbin', '+interactive']
     post = ''
     if path:
         try:
-            cfg  = get_yaml(path)
+            cfg = get_yaml(path)
             args = cfg['spectre']['args']
-            pre  = cfg['spectre']['command_prefix']
+            pre = cfg['spectre']['command_prefix']
             post = cfg['spectre']['command_postfix']
-            exe  = cfg['spectre']['executable']
+            exe = cfg['spectre']['executable']
         except FileNotFoundError:
             pass
-    return pre,exe,args,post
+    return pre, exe, args, post
 
-def start_session( net_path: str, includes: Union[list[str],None] = None
-                 , raw_path: Union[str,None] = None
-                 , config_path: str = ''
-                 ) -> Session:
+
+def start_session(net_path: Union[str, Path], includes: Union[list[str], None] = None,
+                  raw_path: Union[str, None] = None, config_path: str = '',
+                  additional_spectre_args: list[str] = []) -> Session:
     """Start a Spectre interactive session.
 
     Parameters
     ----------
-    net_path : str
+    net_path : Union[str, Path]
         The file path to the netlist that will be used in the Spectre session.
         This file must exist and be readable.
     includes : List[str], optional
@@ -253,14 +336,15 @@ def start_session( net_path: str, includes: Union[list[str],None] = None
     net = Path(net_path).expanduser()
     raw = Path(raw_path) if raw_path else Path(raw_tmp(net))
     log = log_fifo(raw.with_suffix('').as_posix())
-    inc = [f'-I{Path(i).expanduser().as_posix()}' for i in includes] if includes else []
+    inc = [
+        f'-I{Path(i).expanduser().as_posix()}' for i in includes] if includes else []
 
-    command_prefix,spectre_executable,spectre_args,command_postfix \
-            = setup_command(config_path)
+    command_prefix, spectre_executable, spectre_args, command_postfix \
+        = setup_command(config_path)
 
-    args = ( [spectre_executable] + [net.as_posix()]
-           + inc + ['-raw', raw.as_posix(), f'=log {log}']
-           + spectre_args )
+    args = ([spectre_executable] + [net.as_posix()]
+            + inc + ['-raw', raw.as_posix(), f'=log {log}']
+            + spectre_args + additional_spectre_args)
 
     if not net.is_file():
         raise FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT), net)
@@ -277,6 +361,7 @@ def start_session( net_path: str, includes: Union[list[str],None] = None
         raise IOError(errno.EIO, os.strerror(errno.EIO), command)
 
     return Session(net_path, raw.as_posix(), repl, prompt, succ, fail, offset)
+
 
 def run_command(session: Session, command: str) -> bool:
     """Execute an arbitrary SCL command within an active Spectre session.
@@ -315,7 +400,8 @@ def run_command(session: Session, command: str) -> bool:
     """
     # The command does not crash if a bracket is missing
     if not command.count('(') == command.count(')'):
-        raise RuntimeError(f"Syntax Error. Check Brackets in command :{command}")
+        raise RuntimeError(
+            f"Syntax Error. Check Brackets in command :{command}")
 
     if session.repl.isalive():
         try:
@@ -330,7 +416,8 @@ def run_command(session: Session, command: str) -> bool:
             error_message = f"An error occurred while executing command '{command}': {str(e)}"
             raise RuntimeError(error_message) from e
     else:
-        raise RuntimeError("The Spectre session is no longer active. Unable to execute command.")
+        raise RuntimeError(
+            "The Spectre session is no longer active. Unable to execute command.")
 
 
 def run_all(session: Session) -> Dict[str, DataFrame]:
@@ -351,7 +438,11 @@ def run_all(session: Session) -> Dict[str, DataFrame]:
     """
     run_command(session, '(sclRun "all")')
     res = read_results(session.raw_file, offset=session.offset)
-    session.offset = res.get('offset', 0)
+    offset_value = res.get('offset', 0)
+    if isinstance(offset_value, int):
+        session.offset = offset_value
+    else:
+        session.offset = 0
     return {n: p for n, p in res.items() if n != 'offset'}
 
 
@@ -541,34 +632,6 @@ def list_analyses(session: Session) -> list[str]:
     return re.findall(r'\("([^"]+)"\s+"([^"]+)"\)', ' '.join(raw_list))
 
 
-def list_analysis_types(session: Session) -> list[tuple[str, str]]:
-    """Retrieve all available analysis types in the current Spectre session.
-
-    This function sends a command to the Spectre session to retrieve detailed
-    information about a specific analysis type (in this case, "ac"). It then parses
-    the command output to extract and return a list of analysis types and their
-    descriptions.
-
-    Parameters
-    ----------
-    session : Session
-        An instance of the `Session` class representing the active Spectre session.
-        The session contains necessary information, including the raw output file
-        and the current offset for reading results.
-
-    Returns
-    -------
-    list[tuple[str, str]]
-        A list of tuples, where each tuple contains:
-        - The name of the analysis type as the first element (str).
-        - A description about the analysis type as the second element (str).
-    """
-    cmd = '(sclHelp (sclGetAnalysis "ac")'
-    run_command(session, cmd)
-    raw_list = session.repl.before.decode('utf-8').split('\n')[1:]
-    return re.findall(r'\("([^"]+)"\s+"([^"]+)"\)', ' '.join(raw_list))
-
-
 def list_instances(session: Session) -> list[str]:
     """Retrieve a list of all components inthe circuit.
 
@@ -618,32 +681,6 @@ def list_nets(session: Session) -> list[str]:
     run_command(session, cmd)
     raw_list = session.repl.before.decode('utf-8').split('\n')
     return re.findall(r'"(.*?)"', ' '.join(raw_list))
-
-
-def list_circuit_parameters(session: Session) -> list[str]:
-    """Retrieve a list of all circuit parameters in the current Spectre session.
-
-    This function sends a command to the Spectre session to list all available
-    circuit parameters. It then parses the command output and returns a list
-    of parameter names.
-
-    Parameters
-    ----------
-    session : Session
-        An instance of the `Session` class representing the active Spectre session.
-        The session contains necessary information, including the raw output file
-        and the current offset for reading results.
-
-    Returns
-    -------
-    list[str]
-        A list of strings where each string is the name of a circuit parameter
-        available in the current Spectre session.
-    """
-    cmd = '(sclListParameter (sclGetCircuit ""))'
-    run_command(session, cmd)
-    raw_list = session.repl.before.decode('utf-8').split('\n')[1:]
-    return re.findall(r'\("([^"]+)"\s+".*?"\)', ' '.join(raw_list))
 
 
 def list_analysis_parameters(session: Session, analysis_name: str) -> list[str]:

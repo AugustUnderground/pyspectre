@@ -5,12 +5,33 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+
+---
+
+## [0.1.0] - 2025-05-12
 ### Added
+- Added `base_interface.py` module as an abstract definition of the Python-Spectre interface.
+- Introduced the `Session` type to the interface to manage Spectre sessions, simplifying the PySpectre API and enabling object-oriented programming while maintaining the functional interface.
+- Added `dummy_interface.py` to implement a dummy interface for software testing, eliminating the need for Cadence Spectre.
+- Added `spectre_interface.py` to implement the actual interface to Cadence Spectre.
 
 ### Changed
-  
-### Fixed
+- Moved `config.yaml` to the repository’s top-level directory.
+- Added error handling, comments, and print statements to `example_1.py` and `example_2.py`.
+- Renamed `core.py` to `functional.py`.
 
+### Fixed
+- Replaced single quotes with double quotes for consistency.
+- Improved type handling and annotations using the `mypy` type checker.
+
+
+---
+
+## [0.0.3] - 2024-11-11
+### Fixed
+- Adding default Spectre arguments to Spectre call in function `setup_command` in `core.py` when no config file is specified. 
+
+---
 
 ## [0.0.2] - 2024-09-09
 ### Added
