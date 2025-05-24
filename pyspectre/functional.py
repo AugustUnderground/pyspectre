@@ -21,8 +21,8 @@ def netlist_to_tmp(netlist: str) -> str:
 
     Parameters
     ----------
-    net_path : str
-        The path to the netlist file.
+    netlist : str
+        The contents of the netlist file.
 
     Returns
     -------
