@@ -4,7 +4,7 @@ import os
 import yaml
 from pathlib import Path
 import re
-from subprocess import run, DEVNULL, Popen
+from subprocess import run, DEVNULL, Popen, CalledProcessError
 from tempfile import NamedTemporaryFile
 import errno
 import warnings
@@ -175,17 +175,13 @@ def simulate(netlist_path: str, includes: Optional[List[str]] = [], raw_path: st
     if not os.access(net, os.R_OK):
         raise (PermissionError(errno.EACCES, os.strerror(errno.EACCES), net))
 
-    # ret = os.system(cmd)
-    ret = run(cmd, check=True, stdin=DEVNULL, stdout=DEVNULL,
-              stderr=DEVNULL, capture_output=False, ).returncode
+    try:
+        run(cmd, check=True, stdin=DEVNULL, capture_output=True)
+    except CalledProcessError as cpe:
+        print(cpe.stdout.decode())
+        print(cpe.stderr.decode())
+        raise cpe
 
-    if ret != 0:
-        if log_path:
-            with open(log_path, 'r', encoding='utf-8') as log_handle:
-                print(log_handle.read())
-        else:
-            raise (IOError(errno.EIO, os.strerror(errno.EIO),
-                   f'spectre returned with non-zero exit code: {ret}', ))
     if not os.path.isfile(raw):
         raise (FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT), raw))
     if not os.access(raw, os.R_OK):
