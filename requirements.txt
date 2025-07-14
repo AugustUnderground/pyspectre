@@ -1,3 +1,5 @@
 pandas
 pexpect
-pynut
+pynut @ git+https://github.com/augustunderground/pynut.git 
+pyyaml
+typing-extensions
