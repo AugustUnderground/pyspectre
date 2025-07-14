@@ -157,19 +157,18 @@ def simulate(netlist_path: str, includes: Optional[List[str]] = [], raw_path: st
     net = os.path.expanduser(netlist_path)
     inc = [f'-I{os.path.expanduser(i)}' for i in includes] if includes else []
     raw = raw_path or raw_tmp(net)
-    log = f'{net}.log' if not log_path else f'{log_path}'
     if log_path and log_silent:
-        log_option = f'=log {log_path}'
+        log_option = ['=log', log_path]
     elif log_path and not log_silent:
-        log_option = f'+log {log_path}'
+        log_option = ['+log', log_path]
     elif (not log_path) and (not log_silent):
-        log_option = '-log'
+        log_option = ['-log']
     else:
-        buf = log_fifo(log)
-        log_option = f'=log {buf}'
+        buf = log_fifo(f'{net}')
+        log_option = ['=log', buf]
 
     cmd = ['spectre', '-64', '-format', 'nutbin', '-raw', f'{raw}'
-           ] + [log_option] + inc + [net]
+           ] + log_option + inc + [net]
 
     if not os.path.isfile(net):
         raise (FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT), net))
@@ -343,7 +342,7 @@ def start_session(net_path: Union[str, Path], includes: Union[list[str], None] =
         = setup_command(config_path)
 
     args = ([spectre_executable] + [net.as_posix()]
-            + inc + ['-raw', raw.as_posix(), f'=log {log}']
+            + inc + ['-raw', raw.as_posix(), '=log', log]
             + spectre_args + additional_spectre_args)
 
     if not net.is_file():
