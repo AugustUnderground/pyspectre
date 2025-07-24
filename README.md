@@ -39,7 +39,7 @@ includes = ['path/to/pdk/libs']
 session  = ps.start_session(netlist, includes)
 
 # Retrieve simulation analyses defined in the netlist
-analyses = ps.get_analyses(session)
+analyses = ps.list_analyses(session)
 
 # Get values for parameters defined in the netlist
 params   = ps.get_parameters(session, ['Wcm2', 'Ld'])
