@@ -4,7 +4,7 @@ import os
 import yaml
 from pathlib import Path
 import re
-from subprocess import run, DEVNULL, Popen
+from subprocess import run, DEVNULL, Popen, CalledProcessError
 from tempfile import NamedTemporaryFile
 import errno
 import warnings
@@ -157,36 +157,31 @@ def simulate(netlist_path: str, includes: Optional[List[str]] = [], raw_path: st
     net = os.path.expanduser(netlist_path)
     inc = [f'-I{os.path.expanduser(i)}' for i in includes] if includes else []
     raw = raw_path or raw_tmp(net)
-    log = f'{net}.log' if not log_path else f'{log_path}'
     if log_path and log_silent:
-        log_option = f'=log {log_path}'
+        log_option = ['=log', log_path]
     elif log_path and not log_silent:
-        log_option = f'+log {log_path}'
+        log_option = ['+log', log_path]
     elif (not log_path) and (not log_silent):
-        log_option = '-log'
+        log_option = ['-log']
     else:
-        buf = log_fifo(log)
-        log_option = f'=log {buf}'
+        buf = log_fifo(f'{net}')
+        log_option = ['=log', buf]
 
     cmd = ['spectre', '-64', '-format', 'nutbin', '-raw', f'{raw}'
-           ] + [log_option] + inc + [net]
+           ] + log_option + inc + [net]
 
     if not os.path.isfile(net):
         raise (FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT), net))
     if not os.access(net, os.R_OK):
         raise (PermissionError(errno.EACCES, os.strerror(errno.EACCES), net))
 
-    # ret = os.system(cmd)
-    ret = run(cmd, check=True, stdin=DEVNULL, stdout=DEVNULL,
-              stderr=DEVNULL, capture_output=False, ).returncode
+    try:
+        run(cmd, check=True, stdin=DEVNULL, capture_output=True)
+    except CalledProcessError as cpe:
+        print(cpe.stdout.decode())
+        print(cpe.stderr.decode())
+        raise cpe
 
-    if ret != 0:
-        if log_path:
-            with open(log_path, 'r', encoding='utf-8') as log_handle:
-                print(log_handle.read())
-        else:
-            raise (IOError(errno.EIO, os.strerror(errno.EIO),
-                   f'spectre returned with non-zero exit code: {ret}', ))
     if not os.path.isfile(raw):
         raise (FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT), raw))
     if not os.access(raw, os.R_OK):
@@ -343,7 +338,7 @@ def start_session(net_path: Union[str, Path], includes: Union[list[str], None] =
         = setup_command(config_path)
 
     args = ([spectre_executable] + [net.as_posix()]
-            + inc + ['-raw', raw.as_posix(), f'=log {log}']
+            + inc + ['-raw', raw.as_posix(), '=log', log]
             + spectre_args + additional_spectre_args)
 
     if not net.is_file():
