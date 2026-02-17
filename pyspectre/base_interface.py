@@ -24,8 +24,8 @@ class BaseSpectreInterface(ABC):
     @abstractmethod
     def start_session(self, net_path: Union[str, Path], includes: Union[list[str], None] = None,
                       raw_path: Union[str, None] = None, config_path: str = '',
-                      aps_setting: Union[str, None] = None,
-                      x_setting: Union[str, None] = None) -> None:
+                      x_setting: Union[str, None] = None, timeout: int = 120,
+                      log_path: Union[str, None] = None) -> None:
         """Start a Spectre interactive session.
 
         Parameters
@@ -43,17 +43,15 @@ class BaseSpectreInterface(ABC):
         config_path : str, optional
             Path to a yaml file that configures the spectre executable. See
             `config.yaml` as example.
-        aps_setting : str, optional
-            If the value is not set the APS ++ mode is disabled.
-            The ++aps mode uses a different time-step control
-            algorithm compared to Spectre. This can result in improved performance,
-            while satisfying error tolerances and constraints.
-            Possible settings for the errpreset in all transient analyses
-            are 'liberal', 'moderate' or 'conservative'.
         x_setting : str, optional
             If the value is not set the Spectre X mode is disabled.
             The most accurate mode is 'cx', and the highest performing mode is 'vx'.
             Possible values are 'cx', 'ax', 'mx', 'lx', 'vx'.
+        timeout : int, optional
+            Time in seconds after which Spectre closes the session and returns a
+            timeout error. Must be large enough for long simulations.
+        log_path : str, optional
+            Path where Cadence Spectre saves its logs.
 
         Raises
         ------
@@ -70,7 +68,7 @@ class BaseSpectreInterface(ABC):
         pass
 
     @abstractmethod
-    def stop_session(self, remove_raw: bool = False) -> bool:
+    def stop_session(self, remove_raw: bool = True) -> bool:
         """Quit the Spectre interactive session and close the terminal.
 
         This function attempts to gracefully quit the Spectre interactive session by sending
@@ -99,14 +97,16 @@ class BaseSpectreInterface(ABC):
 
     def __init__(self, net_path: Union[str, Path], includes: Optional[List[str]] = None,
                  raw_path: Optional[str] = None, config_path: str = '',
-                 aps_setting: Optional[str] = None, x_setting: Optional[str] = None):
+                 x_setting: Optional[str] = None, timeout: int = 120,
+                 log_path: Union[str, None] = None):
         """Initialize the SpectreInterface with parameters necessary for starting a session."""
         self.net_path = net_path
         self.includes = includes
         self.raw_path = raw_path
         self.config_path = config_path
-        self.aps_setting = aps_setting
         self.x_setting = x_setting
+        self.timeout = timeout
+        self.log_path = log_path
 
     def __enter__(self) -> "BaseSpectreInterface":
         """Enter the runtime context and start the Spectre session.
@@ -118,8 +118,9 @@ class BaseSpectreInterface(ABC):
             includes=self.includes,
             raw_path=self.raw_path,
             config_path=self.config_path,
-            aps_setting=self.aps_setting,
-            x_setting=self.x_setting
+            x_setting=self.x_setting,
+            timeout=self.timeout,
+            log_path=self.log_path
         )
         return self
 
@@ -136,7 +137,7 @@ class BaseSpectreInterface(ABC):
         Literal[False]
             False so that any exception is propagated.
         """
-        self.stop_session(remove_raw=False)
+        self.stop_session(remove_raw=True)
         return False
 
     @abstractmethod
@@ -302,14 +303,13 @@ class BaseSpectreInterface(ABC):
         pass
 
     @abstractmethod
-    def get_analysis_parameter(self, analysis_name, parameter_name
-                               ) -> list[tuple[str, str]]:
+    def get_analysis_parameter(self, analysis_name: str, parameter_name: str) -> dict[str, str]:
         """Retrieve the attributes and their values for a specified parameter in a given analysis.
 
         This function sends a command to the Spectre session to list all attributes
-        associated with a specific parameter of a specified analysis. It then parses
-        the command output and returns a list of tuples, where each tuple contains
-        an attribute name and its corresponding value.
+        associated with a specific parameter of a specified analysis. It parses the
+        command output and returns the results as a dictionary mapping attribute names
+        to their corresponding values.
 
         Parameters
         ----------
@@ -322,10 +322,10 @@ class BaseSpectreInterface(ABC):
 
         Returns
         -------
-        list[tuple[str, str]]
-            A list of tuples where each tuple contains:
-            - The name of the attribute (str).
-            - The value of the attribute (str).
+        dict[str, str]
+            A dictionary where:
+            - Each key is the name of an attribute (str).
+            - Each value is the corresponding attribute value (str).
         """
         pass
 
@@ -385,13 +385,13 @@ class BaseSpectreInterface(ABC):
         pass
 
     @abstractmethod
-    def get_circuit_parameter(self, circuit_parameter: str) -> list[tuple[str, str]]:
+    def get_circuit_parameter(self, circuit_parameter: str) -> dict[str, str]:
         """Retrieve the attributes and their values for a specified circuit parameter.
 
         This function sends a command to the Spectre session to list all attributes
-        associated with a specified circuit parameter. It then parses the command output
-        and returns a list of tuples, where each tuple contains an attribute name
-        and its corresponding value.
+        associated with a specified circuit parameter. It parses the command output
+        and returns the results as a dictionary mapping attribute names to their
+        corresponding values.
 
         Parameters
         ----------
@@ -401,10 +401,10 @@ class BaseSpectreInterface(ABC):
 
         Returns
         -------
-        list[tuple[str, str]]
-            A list of tuples where each tuple contains:
-            - The name of the attribute (str).
-            - The value of the attribute (str).
+        dict[str, str]
+            A dictionary where:
+            - Each key is the name of an attribute (str).
+            - Each value is the corresponding attribute value (str).
         """
         pass
 
@@ -462,13 +462,13 @@ class BaseSpectreInterface(ABC):
 
     @abstractmethod
     def get_instance_parameter(self, instance_name: str,
-                               instance_parameter: str) -> list[tuple[str, str]]:
+                               instance_parameter: str) -> dict[str, str]:
         """Retrieve the attributes and their values for a specified parameter of an instance.
 
         This function sends a command to the Spectre session to list all attributes
-        associated with a specific parameter of a given instance. It then parses the
-        command output and returns a list of tuples, where each tuple contains an
-        attribute name and its corresponding value.
+        associated with a specific parameter of a given instance. It parses the command
+        output and returns the results as a dictionary mapping attribute names to their
+        corresponding values.
 
         Parameters
         ----------
@@ -481,10 +481,10 @@ class BaseSpectreInterface(ABC):
 
         Returns
         -------
-        list[tuple[str, str]]
-            A list of tuples where each tuple contains:
-            - The name of the attribute (str).
-            - The value of the attribute (str).
+        dict[str, str]
+            A dictionary where:
+            - Each key is the name of an attribute (str).
+            - Each value is the corresponding attribute value (str).
         """
         pass
 

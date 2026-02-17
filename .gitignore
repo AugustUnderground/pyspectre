@@ -20,3 +20,4 @@ pyspectre/*$py.class
 
 *.raw
 *.log
+.vscode/*

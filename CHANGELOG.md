@@ -8,6 +8,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ---
 
+## [0.1.2] - 2026-02-16
+### Added
+- Added `timeout` support when starting sessions to better handle long-running Spectre jobs.
+- Added optional `log_path` to control where Spectre logs are written (alternative to FIFO-based logging).
+- Added raw-file read offset tracking to support incremental reads without duplicating already-consumed content.
+
+### Changed
+- Updated parameter getter APIs to return dictionaries (`dict[str, str]`) instead of lists of tuples:
+  - `get_analysis_parameter`
+  - `get_circuit_parameter`
+  - `get_instance_parameter`
+- Propagated the new session arguments and parameter return types across the base interface, functional helpers, dummy interface, and Spectre implementation.
+- Updated `.gitignore` to ignore `.vscode/*`.
+
+### Fixed
+- Improved session cleanup behavior around raw output files (including optional removal via `remove_raw`).
+
+---
+
 ## [0.1.0] - 2025-05-12
 ### Added
 - Added `base_interface.py` module as an abstract definition of the Python-Spectre interface.

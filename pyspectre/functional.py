@@ -286,7 +286,8 @@ def setup_command(path: str):
 
 def start_session(net_path: Union[str, Path], includes: Union[list[str], None] = None,
                   raw_path: Union[str, None] = None, config_path: str = '',
-                  additional_spectre_args: list[str] = []) -> Session:
+                  additional_spectre_args: list[str] = [], timeout: int = 120,
+                  log_path: Union[str, None] = None) -> Session:
     """Start a Spectre interactive session.
 
     Parameters
@@ -304,6 +305,12 @@ def start_session(net_path: Union[str, Path], includes: Union[list[str], None] =
     config_path : str, optional
         Path to a yaml file that configures the spectre executable. See
         `config.yaml` as example.
+    timeout : int, optional
+        Time in seconds after which Spectre closes the session and returns a
+        timeout error. Must be large enough for long simulations.
+    log_path : str, optional
+            Path where Cadence Spectre saves its logs.
+
     Returns
     -------
     Session
@@ -330,7 +337,10 @@ def start_session(net_path: Union[str, Path], includes: Union[list[str], None] =
     fail = r'.*\nnil'
     net = Path(net_path).expanduser()
     raw = Path(raw_path) if raw_path else Path(raw_tmp(net))
-    log = log_fifo(raw.with_suffix('').as_posix())
+    if log_path:
+        log = str(log_path)
+    else:
+        log = log_fifo(raw.with_suffix('').as_posix())
     inc = [
         f'-I{Path(i).expanduser().as_posix()}' for i in includes] if includes else []
 
@@ -348,7 +358,7 @@ def start_session(net_path: Union[str, Path], includes: Union[list[str], None] =
 
     command = command_prefix + ' '.join(args) + command_postfix
 
-    repl = pexpect.spawn(command, timeout=120)
+    repl = pexpect.spawn(command, timeout=timeout)
     repl.delaybeforesend = 0.001
     repl.delayafterread = 0.001
 
@@ -462,7 +472,15 @@ def run_analysis(session: Session, analysis: str) -> Dict[str, DataFrame]:
     """
     cmd = f'(sclRunAnalysis (sclGetAnalysis "{analysis}"))'
     run_command(session, cmd)
-    return read_results(session.raw_file)
+    res = read_results(session.raw_file, offset=session.offset)
+
+    offset_value = res.get('offset', 0)
+    if isinstance(offset_value, int):
+        session.offset = offset_value
+    else:
+        session.offset = 0
+
+    return {n: p for n, p in res.items() if n != 'offset'}
 
 
 def set_parameter(session: Session, param: str, value: float) -> bool:
@@ -560,7 +578,7 @@ def get_parameters(session: Session, params: Iterable[str]) -> Dict[str, float]:
     return {param: get_parameter(session, param) for param in params}
 
 
-def stop_session(session, remove_raw: bool = False) -> bool:
+def stop_session(session, remove_raw: bool = True) -> bool:
     """Quit the Spectre interactive session and close the terminal.
 
     This function attempts to gracefully quit the Spectre interactive session by sending
@@ -707,13 +725,14 @@ def list_analysis_parameters(session: Session, analysis_name: str) -> list[str]:
     return re.findall(r'\("([^"]+)"\s+".*?"\)', ' '.join(raw_list))
 
 
-def get_analysis_parameter(session, analysis_name, parameter_name) -> list[tuple[str, str]]:
+def get_analysis_parameter(session: Session, analysis_name: str, parameter_name: str
+                           ) -> dict[str, str]:
     """Retrieve the attributes and their values for a specified parameter in a given analysis.
 
     This function sends a command to the Spectre session to list all attributes
-    associated with a specific parameter of a specified analysis. It then parses
-    the command output and returns a list of tuples, where each tuple contains
-    an attribute name and its corresponding value.
+    associated with a specific parameter of a specified analysis. It parses the
+    command output and returns the results as a dictionary mapping attribute names
+    to their corresponding values.
 
     Parameters
     ----------
@@ -730,10 +749,10 @@ def get_analysis_parameter(session, analysis_name, parameter_name) -> list[tuple
 
     Returns
     -------
-    list[tuple[str, str]]
-        A list of tuples where each tuple contains:
-        - The name of the attribute (str).
-        - The value of the attribute (str).
+    dict[str, str]
+        A dictionary where:
+        - Each key is the name of an attribute (str).
+        - Each value is the corresponding attribute value (str).
     """
     cmd = (
         f'(sclListAttribute (sclGetParameter (sclGetAnalysis "{analysis_name}") '
@@ -741,7 +760,7 @@ def get_analysis_parameter(session, analysis_name, parameter_name) -> list[tuple
     )
     run_command(session, cmd)
     raw_list = session.repl.before.decode('utf-8').split('\n')[1:]
-    return re.findall(r'\("([^"]+)"\s+"?([^"\)]*)"?\)', ' '.join(raw_list))
+    return dict(re.findall(r'\("([^"]+)"\s+"?([^"\)]*)"?\)', ' '.join(raw_list)))
 
 
 def set_analysis_parameter(session: Session, analysis_name: str, parameter_name: str,
@@ -812,13 +831,13 @@ def create_analysis(session: Session, analysis_type: str, analysis_name: str) ->
     return run_command(session, cmd)
 
 
-def get_circuit_parameter(session: Session, circuit_parameter: str) -> list[tuple[str, str]]:
+def get_circuit_parameter(session: Session, circuit_parameter: str) -> dict[str, str]:
     """Retrieve the attributes and their values for a specified circuit parameter.
 
     This function sends a command to the Spectre session to list all attributes
-    associated with a specified circuit parameter. It then parses the command output
-    and returns a list of tuples, where each tuple contains an attribute name
-    and its corresponding value.
+    associated with a specified circuit parameter. It parses the command output
+    and returns the results as a dictionary mapping attribute names to their
+    corresponding values.
 
     Parameters
     ----------
@@ -832,15 +851,15 @@ def get_circuit_parameter(session: Session, circuit_parameter: str) -> list[tupl
 
     Returns
     -------
-    list[tuple[str, str]]
-        A list of tuples where each tuple contains:
-        - The name of the attribute (str).
-        - The value of the attribute (str).
+    dict[str, str]
+        A dictionary where:
+        - Each key is the name of an attribute (str).
+        - Each value is the corresponding attribute value (str).
     """
     cmd = f'(sclListAttribute (sclGetParameter (sclGetCircuit "") "{circuit_parameter}"))'
     run_command(session, cmd)
     raw_list = session.repl.before.decode('utf-8').split('\n')[1:]
-    return re.findall(r'\("([^"]+)"\s+"?([^"\)]*)"?\)', ' '.join(raw_list))
+    return dict(re.findall(r'\("([^"]+)"\s+"?([^"\)]*)"?\)', ' '.join(raw_list)))
 
 
 def set_circuit_parameter(session: Session, circuit_parameter: str, attribute_name: str,
@@ -911,13 +930,13 @@ def list_instance_parameters(session: Session, instance_name: str) -> list[tuple
 
 
 def get_instance_parameter(session: Session, instance_name: str,
-                           instance_parameter: str) -> list[tuple[str, str]]:
+                           instance_parameter: str) -> dict[str, str]:
     """Retrieve the attributes and their values for a specified parameter of an instance.
 
     This function sends a command to the Spectre session to list all attributes
-    associated with a specific parameter of a given instance. It then parses the
-    command output and returns a list of tuples, where each tuple contains an
-    attribute name and its corresponding value.
+    associated with a specific parameter of a given instance. It parses the command
+    output and returns the results as a dictionary mapping attribute names to their
+    corresponding values.
 
     Parameters
     ----------
@@ -934,10 +953,10 @@ def get_instance_parameter(session: Session, instance_name: str,
 
     Returns
     -------
-    list[tuple[str, str]]
-        A list of tuples where each tuple contains:
-        - The name of the attribute (str).
-        - The value of the attribute (str).
+    dict[str, str]
+        A dictionary where:
+        - Each key is the name of an attribute (str).
+        - Each value is the corresponding attribute value (str).
     """
     cmd = (
         f'(sclListAttribute (sclGetParameter (sclGetInstance "{instance_name}") '
@@ -945,7 +964,7 @@ def get_instance_parameter(session: Session, instance_name: str,
     )
     run_command(session, cmd)
     raw_list = session.repl.before.decode('utf-8').split('\n')[1:]
-    return re.findall(r'\("([^"]+)"\s+"?([^"\)]*)"?\)', ' '.join(raw_list))
+    return dict(re.findall(r'\("([^"]+)"\s+"?([^"\)]*)"?\)', ' '.join(raw_list)))
 
 
 def set_instance_parameter(session: Session, instance_name: str, instance_parameter: str,

@@ -15,11 +15,11 @@ class DummySpectreInterface(BaseSpectreInterface):
     """
     def start_session(self, net_path: Union[str, Path], includes: Union[list[str], None] = None,
                       raw_path: Union[str, None] = None, config_path: str = '',
-                      aps_setting: Union[str, None] = None,
-                      x_setting: Union[str, None] = None) -> None:
+                      x_setting: Union[str, None] = None, timeout: int = 120,
+                      log_path: Union[str, None] = None) -> None:
         pass
 
-    def stop_session(self, remove_raw: bool = False) -> bool:
+    def stop_session(self, remove_raw: bool = True) -> bool:
         return True
 
     def run_simulation(self) -> Dict[str, DataFrame]:
@@ -59,8 +59,8 @@ class DummySpectreInterface(BaseSpectreInterface):
         return True
 
     def get_analysis_parameter(self, analysis_name: str, parameter_name: str
-                               ) -> List[tuple[str, str]]:
-        return [("attr1", "value1"), ("attr2", "value2")]
+                               ) -> dict[str, str]:
+        return {"attr1": "value1", "attr2": "value2"}
 
     def create_analysis(self, analysis_type: str, analysis_name: str) -> bool:
         return True
@@ -71,8 +71,8 @@ class DummySpectreInterface(BaseSpectreInterface):
     def list_instances(self) -> List[str]:
         return ["instance1", "instance2", "instance3"]
 
-    def get_circuit_parameter(self, circuit_parameter: str) -> List[tuple[str, str]]:
-        return [("attr1", "value1"), ("attr2", "value2")]
+    def get_circuit_parameter(self, circuit_parameter: str) -> dict[str, str]:
+        return {"attr1": "value1", "attr2": "value2"}
 
     def set_circuit_parameter(self, circuit_parameter: str, attribute_name: str,
                               value: str) -> bool:
@@ -82,8 +82,8 @@ class DummySpectreInterface(BaseSpectreInterface):
         return [("param1", "value1"), ("param2", "value2")]
 
     def get_instance_parameter(self, instance_name: str, instance_parameter: str
-                               ) -> List[tuple[str, str]]:
-        return [("attr1", "value1"), ("attr2", "value2")]
+                               ) -> dict[str, str]:
+        return {"attr1": "value1", "attr2": "value2"}
 
     def set_instance_parameter(self, instance_name: str, instance_parameter: str,
                                attribute_name: str, value: str) -> bool:
