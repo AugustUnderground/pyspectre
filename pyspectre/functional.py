@@ -150,7 +150,8 @@ def read_results(raw_file: str, offset: int = 0) -> Dict[str, DataFrame]:
 
 
 def simulate(netlist_path: str, includes: Optional[List[str]] = [], raw_path: str = "",
-             log_path: str = "", log_silent=True) -> Dict[str, DataFrame]:
+             log_path: str = "", log_silent=True, additional_spectre_args: list[str] = []
+            ) -> Dict[str, DataFrame]:
     """
     Passes the given netlist path to spectre and reads the results in.
     """
@@ -168,7 +169,7 @@ def simulate(netlist_path: str, includes: Optional[List[str]] = [], raw_path: st
         log_option = ['=log', buf]
 
     cmd = ['spectre', '-64', '-format', 'nutbin', '-raw', f'{raw}'
-           ] + log_option + inc + [net]
+           ] + log_option + inc + additional_spectre_args + [net]
 
     if not os.path.isfile(net):
         raise (FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT), net))
@@ -646,7 +647,7 @@ def list_analyses(session: Session) -> list[str]:
 
 
 def list_instances(session: Session) -> list[str]:
-    """Retrieve a list of all components inthe circuit.
+    """Retrieve a list of all components in the circuit.
 
     This function sends a command to the Spectre session to list all available
     instances. It then parses the command output and returns a list of instance
@@ -666,6 +667,32 @@ def list_instances(session: Session) -> list[str]:
         in the current Spectre session.
     """
     cmd = '(sclListInstance)'
+    run_command(session, cmd)
+    raw_list = session.repl.before.decode('utf-8').split('\n')[1:]
+    return re.findall(r'\("([^"]+)"\s+"([^"]+)"\)', ' '.join(raw_list))
+
+
+def list_models(session: Session) -> list[str]:
+    """Retrieve a list of all models in the circuit.
+
+    This function sends a command to the Spectre session to list all available
+    models. It then parses the command output and returns a list of model
+    names.
+
+    Parameters
+    ----------
+    session : Session
+        An instance of the `Session` class representing the active Spectre session.
+        The session contains necessary information, including the raw output file
+        and the current offset for reading results.
+
+    Returns
+    -------
+    list[str]
+        A list of strings where each string is the name of a model available
+        in the current Spectre session.
+    """
+    cmd = '(sclListModel)'
     run_command(session, cmd)
     raw_list = session.repl.before.decode('utf-8').split('\n')[1:]
     return re.findall(r'\("([^"]+)"\s+"([^"]+)"\)', ' '.join(raw_list))
@@ -898,13 +925,12 @@ def set_circuit_parameter(session: Session, circuit_parameter: str, attribute_na
     return run_command(session, cmd)
 
 
-def list_instance_parameters(session: Session, instance_name: str) -> list[tuple[str, str]]:
+def list_instance_parameters(session: Session, instance_name: str) -> list[str]:
     """Retrieve the parameters and their values for a specified instance.
 
     This function sends a command to the Spectre session to list all parameters
     associated with a specific instance. It then parses the command output and
-    returns a list of tuples, where each tuple contains a parameter name and its
-    corresponding value.
+    returns a list of parameter names.
 
     Parameters
     ----------
@@ -918,10 +944,8 @@ def list_instance_parameters(session: Session, instance_name: str) -> list[tuple
 
     Returns
     -------
-    list[tuple[str, str]]
-        A list of tuples where each tuple contains:
-        - The name of the parameter (str).
-        - The value of the parameter (str).
+    list[str]
+        A list of parameter names
     """
     cmd = f'(sclListParameter (sclGetInstance "{instance_name}"))'
     run_command(session, cmd)
@@ -1003,5 +1027,111 @@ def set_instance_parameter(session: Session, instance_name: str, instance_parame
     cmd = (
         f'(sclSetAttribute (sclGetParameter (sclGetInstance "{instance_name}") '
         f'"{instance_parameter}") "{attribute_name}" "{value}")'
+    )
+    return run_command(session, cmd)
+
+
+def list_model_parameters(session: Session, model_name: str) -> list[str]:
+    """Retrieve the parameters and their values for a specified model.
+
+    This function sends a command to the Spectre session to list all parameters
+    associated with a specific model. It then parses the command output and
+    returns a list of parameter names.
+
+    Parameters
+    ----------
+    session : Session
+        An instance of the `Session` class representing the active Spectre session.
+        The session contains necessary information, including the raw output file
+        and the current offset for reading results.
+    model_name : str
+        The name of the model whose parameters are to be retrieved. This should
+        be a valid model name within the current Spectre session.
+
+    Returns
+    -------
+    list[str]
+        A list of parameter names
+    """
+    cmd = f'(sclListParameter (sclGetModel "{model_name}"))'
+    run_command(session, cmd)
+    raw_list = session.repl.before.decode('utf-8').split('\n')[1:]
+    return re.findall(r'\("([^"]+)"\s+".*?"\)', ' '.join(raw_list))
+
+
+def get_model_parameter(session: Session, model_name: str,
+                           model_parameter: str) -> dict[str, str]:
+    """Retrieve the attributes and their values for a specified parameter of a model.
+
+    This function sends a command to the Spectre session to list all attributes
+    associated with a specific parameter of a given model. It parses the command
+    output and returns the results as a dictionary mapping attribute names to their
+    corresponding values.
+
+    Parameters
+    ----------
+    session : Session
+        An instance of the `Session` class representing the active Spectre session.
+        The session contains necessary information, including the raw output file
+        and the current offset for reading results.
+    model_name : str
+        The name of the model whose parameter attributes are to be retrieved.
+        This should be a valid model name within the current Spectre session.
+    model_parameter : str
+        The name of the parameter whose attributes and values are to be retrieved.
+        This should be a valid parameter name within the specified model.
+
+    Returns
+    -------
+    dict[str, str]
+        A dictionary where:
+        - Each key is the name of an attribute (str).
+        - Each value is the corresponding attribute value (str).
+    """
+    cmd = (
+        f'(sclListAttribute (sclGetParameter (sclGetModel "{model_name}") '
+        f'"{model_parameter}"))'
+    )
+    run_command(session, cmd)
+    raw_list = session.repl.before.decode('utf-8').split('\n')[1:]
+    return dict(re.findall(r'\("([^"]+)"\s+"?([^"\)]*)"?\)', ' '.join(raw_list)))
+
+
+def set_model_parameter(session: Session, model_name: str, model_parameter: str,
+                           attribute_name: str, value: str) -> bool:
+    """Set the value of a specific attribute for a parameter of a model.
+
+    This function sends a command to the Spectre session to set the value of a
+    specified attribute for a parameter within a particular model. The command
+    is constructed based on the provided model name, parameter name, attribute
+    name, and the new value.
+
+    Parameters
+    ----------
+    session : Session
+        An instance of the `Session` class representing the active Spectre session.
+        The session contains necessary information, including the raw output file
+        and the current offset for reading results.
+    model_name : str
+        The name of the model that contains the parameter to be modified. This
+        should be a valid model name within the current Spectre session.
+    model_parameter : str
+        The name of the parameter whose attribute is to be set. This should be a
+        valid parameter name within the specified model.
+    attribute_name : str
+        The name of the attribute to be modified. This should be a valid attribute
+        name for the specified parameter.
+    value : str
+        The new value to set for the specified attribute.
+
+    Returns
+    -------
+    bool
+        `True` if the command to set the attribute was successfully executed,
+        `False` otherwise.
+    """
+    cmd = (
+        f'(sclSetAttribute (sclGetParameter (sclGetModel "{model_name}") '
+        f'"{model_parameter}") "{attribute_name}" "{value}")'
     )
     return run_command(session, cmd)
